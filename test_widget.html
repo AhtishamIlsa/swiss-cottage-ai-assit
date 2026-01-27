@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Widget Test</title>
+    <!-- Chatbot Widget CSS -->
+    <link rel="stylesheet" href="http://localhost:8000/static/css/chatbot-widget.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+        }
+        .info {
+            background: #f0f0f0;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Swiss Cottages Chatbot Widget Test</h1>
+    
+    <div class="info">
+        <h2>How to use:</h2>
+        <ol>
+            <li>Make sure FastAPI server is running: <code>./run_api.sh</code></li>
+            <li>Look for the chat button in the bottom-right corner</li>
+            <li>Click it to open the chat window</li>
+            <li>Start asking questions!</li>
+        </ol>
+    </div>
+
+    <div class="info">
+        <h2>Test Questions:</h2>
+        <ul>
+            <li>"Hello" - Test greeting</li>
+            <li>"What is Swiss Cottages Bhurban?" - Test FAQ</li>
+            <li>"What are the prices?" - Test pricing query</li>
+            <li>"Show me images of cottage 7" - Test image request</li>
+        </ul>
+    </div>
+
+    <p>Scroll down to see the chat button appear in the bottom-right corner.</p>
+    <p style="height: 1000px;">Spacer content to demonstrate scrolling...</p>
+
+    <!-- Chatbot Widget JavaScript -->
+    <script src="http://localhost:8000/static/js/chatbot-widget.js"></script>
+</body>
+</html>
