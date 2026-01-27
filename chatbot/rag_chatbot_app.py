@@ -22,7 +22,7 @@ from bot.model.model_registry import get_model_settings, get_models
 from helpers.log import get_logger
 from helpers.prettier import prettify_source
 
-logger = get_logger(__name__)i
+logger = get_logger(__name__)
 
 st.set_page_config(page_title="RAG Chatbot", page_icon="💬", initial_sidebar_state="collapsed")
 
