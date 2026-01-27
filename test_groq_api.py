@@ -5,6 +5,21 @@ import os
 import sys
 from pathlib import Path
 
+# Load .env file if it exists
+def load_env_file():
+    """Load environment variables from .env file."""
+    env_file = Path(__file__).parent / ".env"
+    if env_file.exists():
+        with open(env_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    os.environ[key.strip()] = value.strip()
+
+# Load .env file before importing other modules
+load_env_file()
+
 # Add chatbot to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -19,15 +34,20 @@ def test_groq_api():
     print("Testing Groq API Connection")
     print("=" * 60)
     
-    # Get API key from environment variable only
+    # Get API key from environment variable (loaded from .env or system env)
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        print("❌ Error: GROQ_API_KEY not set in environment!")
-        print("   Please set it with: export GROQ_API_KEY='your-api-key'")
-        print("   Or run: source setup_groq_api.sh YOUR_API_KEY")
+        print("❌ Error: GROQ_API_KEY not set!")
+        print("   Please create a .env file with: GROQ_API_KEY=your-api-key")
+        print("   Or copy .env.example to .env and add your API key")
+        print("   Or set it with: export GROQ_API_KEY='your-api-key'")
+        print("   Or run: ./setup_groq_api.sh YOUR_API_KEY")
         sys.exit(1)
     else:
-        print(f"✅ Using GROQ_API_KEY from environment")
+        env_source = "environment variable"
+        if (Path(__file__).parent / ".env").exists():
+            env_source = ".env file"
+        print(f"✅ Using GROQ_API_KEY from {env_source}")
     
     print(f"API Key (first 20 chars): {api_key[:20]}...")
     print()

@@ -56,12 +56,20 @@ K="${2:-5}"
 STRATEGY="${3:-create-and-refine}"  # Changed from async-tree-summarization (too slow)
 MAX_TOKENS="${4:-512}"
 
-# Groq API Key (must be set via GROQ_API_KEY env var)
-# Get from environment variable - do not hardcode API keys!
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "📝 Loading environment variables from .env file..."
+    set -a  # automatically export all variables
+    source .env
+    set +a
+fi
+
+# Groq API Key (from .env file or environment variable)
 if [ -z "$GROQ_API_KEY" ]; then
     echo "⚠️  WARNING: GROQ_API_KEY not set!"
-    echo "   Please set it with: export GROQ_API_KEY='your-api-key'"
-    echo "   Or run: source setup_groq_api.sh"
+    echo "   Please create a .env file with: GROQ_API_KEY=your-api-key"
+    echo "   Or copy .env.example to .env and add your API key"
+    echo "   Or set it with: export GROQ_API_KEY='your-api-key'"
     exit 1
 fi
 export GROQ_API_KEY

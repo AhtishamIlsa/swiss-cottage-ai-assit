@@ -37,5 +37,10 @@ __pycache__/
 *.lock
 *~
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
 # Keep .gitkeep files but ignore everything else in models
 !models/.gitkeep
