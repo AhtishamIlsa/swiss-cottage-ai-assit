@@ -1,0 +1,41 @@
+# Model files (very large - several GB each)
+models/*.gguf
+models/*.bin
+models/*.safetensors
+models/*.pt
+models/*.pth
+
+# Vector store database files
+vector_store/
+vector_store_backup*/
+*.sqlite3
+*.db
+
+# Log files
+*.log
+streamlit.log
+rag_chatbot.log
+
+# Large data files (uncomment if you don't want to track these)
+# *.xlsx
+# *.csv
+# *.pdf
+# *.zip
+
+# Image archives (if large)
+# Swiss Cottage *.zip
+# Swiss Cottage */
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Lock files (Excel, LibreOffice, etc.)
+.~lock.*
+*.lock
+*~
+
+# Keep .gitkeep files but ignore everything else in models
+!models/.gitkeep

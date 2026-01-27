@@ -1,0 +1,323 @@
+Unnamed: 0,Category,#,Question,Answer,Unnamed: 5,Account / Resource,Link,Unnamed: 8,Step,Chatbot Message (Shown to User),User Action (What is Shown & Selectable),System / AI Behavior,Unnamed: 13,Unnamed: 14
+,General & About,1.0,What is Swiss Cottages Bhurban?,"Swiss Cottages Bhurban is a premium private cottage accommodation located in the scenic hills of Bhurban near Murree. It offers fully furnished Swiss-style cottages designed for families and groups who want privacy, comfort, and beautiful mountain views instead of a typical hotel stay.",,Website,https://swisscottagesbhurban.com/,,Start,Hi! 👋 Ready to book your stay at Swiss Cottages Bhurban?Please choose an option below:,Two quick-reply buttons:     🔘 Book a cottage.       🔘 Explore cottages & prices,If “Book a cottage” → start flow,,
+,,2.0,What type of property is Swiss Cottages?,"Swiss Cottages is not a hotel or hostel. It is a private cottage setup where guests get the entire cottage to themselves, including bedrooms, living areas, kitchen, terrace, and parking.                                                                                                                                                                                                                                                                        ",,Instagram ,https://www.instagram.com/swiss_cottages_bhurban/,,1,Let’s start with your dates 📅When would you like to check in and check out?,📅 Calendar picker opens.  • Past dates disabled.    • Minimum 1-night stay enforced. ,Validate date range,,
+,,3.0,What makes Swiss Cottages different from hotels?,"Unlike hotels, Swiss Cottages provides larger living spaces, private kitchens, outdoor terraces, and more privacy. It is ideal for families and groups who prefer a home-like environment with scenic views.",,Tiktok,-,,2,How many guests will be staying? 👨‍👩‍👧‍👦,➕➖ Guest counter input.     • Minimum: 1.                 • Maximum shown per cottage rules,Check capacity rules,,
+,,4.0,Is Swiss Cottages suitable for families?,"Yes, Swiss Cottages is very family-friendly. The cottages are spacious, located in a gated community, and suitable for families with children, elders, and group stays.",,Airbnb 11,https://www.airbnb.com/rooms/886682083069412842?source_impression_id=p3_1768373959_P3-TaoEexUttIGk0,,3,What type of stay is this?,Two selectable buttons:         🔘 Family stay               🔘 Friends’ stay,Apply stay eligibility rules,,
+,,5.0,What is Swiss Cottages Bhurban?,"Swiss Cottages Bhurban is a privately owned luxury cottage accommodation located in the Murree Hills at Bhurban. It offers fully furnished 3-bedroom cottages designed for families and groups looking for privacy, comfort, scenic views, and personalized service instead of a traditional hotel stay.",,Airbnb 9,https://www.airbnb.com/rooms/651168099240245080?source_impression_id=p3_1768373938_P3UsgNEH2WEbHfrW,,4,Checking availability for you… ⏳,⏳ Loading indicator,"AI checks availability for Cottage 7, 9, 11",,
+,,6.0,What type of experience do you offer at Swiss Cottages?,"Swiss Cottages offers a peaceful, scenic, and private stay experience focused on comfort, nature, and relaxation. Guests enjoy spacious living areas, mountain views, personalized support, and a calm environment ideal for family vacations, group trips, and weekend getaways.",,Facebook,https://www.facebook.com/profile.php?id=100095024470541,,5,Here are the best available cottages for your stay:,🏡 Selectable cards showing:  • Cottage number. • Guest capacity. • Key highlight (family / scenic / spacious),Only available cottages shown,,
+,,7.0,What cottages are available at Swiss Cottages?,Swiss Cottages currently offers Cottage 9 and Cottage 11 for stays. Additional cottages may also be available depending on inventory and season.,,Contact Us,https://swisscottagesbhurban.com/contact-us/,,,• Cottage 11 – Cozy & family-friendly• Cottage 9 – Spacious for larger groups• Cottage 7 – Scenic views,User taps one card,Lock selection,,
+,,8.0,Is Swiss Cottages safe and secure?,"Yes, Swiss Cottages is located inside a secure gated community with security arrangements in place. Guest safety and comfort are a top priority, making it suitable for families, couples, and group stays.",,Calendar Link ,-,,6,Here’s your booking summary 🧾,📄 Auto-generated summary card (read-only):  • Cottage selected. • Dates. • Guests•.  Price per night. • Total amount,Auto price calculation,,
+,Properties & Spaces,9.0,What properties are available at Swiss Cottages?,"Currently, Swiss Cottages offers multiple 3-bedroom cottages including Cottage 9 and Cottage 11. Each cottage is fully furnished and differs slightly in size, furniture style, and balcony or terrace space.",,Contact Manager on WhatsApp,-,,7,"To confirm your booking, please make the payment 💳",💳 Payment info card shown:  • Bank name. • Account title•.  Account number / IBAN📤 Upload screenshot button,Booking on hold,,
+,,10.0,Describe Cottage 9,"Cottage 9 is an elegant two-storey luxury cottage, thoughtfully designed to offer comfort, privacy, and scenic beauty. The ground floor, conveniently accessible from the car parking level, features a tastefully furnished lounge with breathtaking views, a luxurious master bedroom with a charming slanted hut-style roof and an en-suite bathroom, and a modern, well-equipped kitchen with a dining area.
+
+The private balcony provides comfortable seating for 4–5 guests, making it an ideal spot to enjoy breakfast or evening tea while taking in the serene mountain surroundings.
+
+The lower level includes two beautifully designed bedrooms that share a common bathroom, along with a functional kitchen, making Cottage 9 especially suitable for families or groups seeking a refined and peaceful mountain getaway.",,Request Custom Quote,https://swisscottagesbhurban.com/contact-us/,,8,Please upload the payment screenshot once done.,📎 Image upload (gallery / camera),Verify payment,,
+,,11.0,Describe Cottage 11,"Cottage 11 is a cozy two-storey cottage, carefully designed for comfort, warmth, and family-friendly living. The ground floor, accessible directly from the car parking level, includes a furnished lounge with beautiful scenic views, a luxurious master bedroom with an en-suite bathroom, and a modern kitchen with a dining area.
+
+A key highlight of Cottage 11 is its beautiful attic space located above the master bedroom, which serves as an additional cozy sleeping area. This feature is especially popular with families and children, adding both charm and extra functionality to the cottage.
+
+The private balcony offers relaxing views and a peaceful natural atmosphere. The lower level hosts two well-designed bedrooms sharing a common bathroom, along with a fully equipped kitchen, making Cottage 11 an excellent choice for comfortable family stays.",,Talk to Manager,-,,9,Payment received! ✅ Your booking is confirmed 🎉,📄 Confirmation card shown:  • Booking ID• Cottage• Dates• Guests,Booking confirmed,,
+,,12.0,Describe Cottage 7,"Cottage 7 is a charming two-bedroom corner cottage that offers enhanced privacy and exceptional dual-sided panoramic views of both the mountains and lush garden surroundings. Its corner positioning makes it one of the most scenic cottages in the community.
+
+The ground floor, easily accessible from the car parking level, features a spacious and sunlit lounge with large windows, a modern open kitchen, and a dining area, all designed to maximize natural light and views. A well-appointed bathroom is also located on this level for added convenience.
+
+The lower floor includes two beautifully designed bedrooms, each with dual-aspect windows that allow abundant natural light. One bedroom has a private en-suite bathroom, while the second bedroom uses a bathroom located just outside the room, ensuring comfort and practicality for families or groups.",,View Photo Gallery,-,,End,Check-in instructions will be shared before arrival. We look forward to hosting you 🌿,“Done” / “Chat with support”,End flow,,
+,,13.0,"What is the difference between Cottage 7, Cottage 9, and Cottage 11?","Cottage 7, Cottage 9, and Cottage 11 each offer a unique layout and experience while maintaining the same high standards of comfort and privacy.                                             🔘 View Cottage Photos
+👉 https://swisscottagesbhurban.com/
+
+🔘 Help Me Choose
+👉 https://swisscottagesbhurban.com/contact-us/
+
+Cottage 7 is a two-bedroom corner cottage known for its dual-sided panoramic views of the mountains and gardens. Its corner positioning provides enhanced privacy, abundant natural light, and scenic views from multiple angles. It is ideal for smaller families or groups who value views and privacy.
+
+Cottage 9 is an elegant three-bedroom, two-storey cottage designed for families and larger groups. It features a spacious lounge, a master bedroom with an en-suite bathroom on the upper level, a balcony with seating for 4–5 guests, and two additional bedrooms on the lower level. It offers a refined layout with scenic views and generous living space.
+
+Cottage 11 is a cozy three-bedroom, two-storey cottage that is especially popular with families. It includes a unique attic sleeping space above the master bedroom, which is particularly loved by children. The cottage offers a comfortable lounge, private balcony, and well-planned living areas, making it a warm and family-friendly option.
+
+Overall, Cottage 7 is best for couples or small families seeking privacy and views, Cottage 9 suits larger families or groups needing more space, and Cottage 11 is ideal for families looking for a cozy stay with an extra sleeping area.",,Read Airbnb Reviews - Cottage 9,https://www.airbnb.com/rooms/651168099240245080?source_impression_id=p3_1768373938_P3UsgNEH2WEbHfrW,,,,,,,
+,,14.0,What is Cottage 9?,"Cottage 9 is a 3-bedroom luxury cottage suitable for families and medium-sized groups. It includes bedrooms, bathrooms, a lounge, a fully functional kitchen, and a balcony or terrace with scenic valley views.",,Read Airbnb Reviews - Cottage 11,https://www.airbnb.com/rooms/886682083069412842?source_impression_id=p3_1768373959_P3-TaoEexUttIGk0,,,,,,,
+,,15.0,What is Cottage 11?,"Cottage 11 is a larger 3-bedroom Swiss-style cottage spread across multiple levels. It offers a spacious lounge, panoramic mountain views, terrace seating, and is ideal for larger groups or extended stays.",,View on Google Maps,-,,,,,,,
+,,16.0,Can you tell me about Cottage 7?,"Cottage 7 is a charming two-bedroom corner cottage that offers enhanced privacy and exceptional dual-sided panoramic views of both the mountains and lush garden surroundings. Its corner positioning allows more natural light and wider views compared to standard cottages.
+
+The ground floor, conveniently accessible from the car parking level, features a spacious, sunlit lounge with large windows, a modern open kitchen, and a dining area, all designed to make the most of the scenic surroundings. A well-appointed bathroom is also located on this level for added convenience.
+
+The lower floor hosts two beautifully designed bedrooms, each with dual-aspect windows that bring in abundant natural light. One bedroom includes a private en-suite bathroom, while the second bedroom uses a bathroom located just outside the room, ensuring comfort and practicality for families or small groups.",,Cottages pin,https://goo.gl/maps/PQbSR9DsuxwjxUoU6?g_st=aw,,,,,,,
+,,17.0,How many bedrooms are available and what is the total accommodation?,"Swiss Cottages offers both 2-bedroom and 3-bedroom cottages. A 3-bedroom cottage can accommodate up to 10 guests, while a 2-bedroom cottage can accommodate up to 6 guests.",,Azad Kashmir view point near PC Bhurban,https://maps.app.goo.gl/vcvDmZ2KTg2An3WK6?g_st=aw,,,,,,,
+,,18.0,Can a large group stay in one cottage?,"No. For comfort, safety, and community guidelines, no more than 9 guests are allowed in a single cottage.
+Groups exceeding this limit must book multiple cottages.",,Hiking trail near Hotel One Bhurban,https://maps.app.goo.gl/ELzmaMnqv8NjSTTg9?g_st=aw,,,,,,,
+,,19.0,Can larger groups or corporate teams stay at Swiss Cottages,"Yes, corporate trips and larger groups are welcome, however they must book multiple cottages based on the total number of guests.
+For such bookings, guests are required to contact the manager directly so availability, cottage allocation, and pricing can be arranged properly.",,Walking trail near Governor House Bhurban,https://maps.app.goo.gl/9zLdWCcYYEEb77Fh7?g_st=aw,,,,,,,
+,,20.0,How many guests can stay in each cottage?,Each cottage comfortably accommodates up to 6 guests at the base price. Additional guests can be accommodated with prior confirmation and adjusted pricing.,,Chinar golf club,https://maps.app.goo.gl/DEoq4X5HTXsQ5ZDTA?g_st=aw,,,,,,,
+,,21.0,Do guests get the entire cottage?,"Yes, guests always get exclusive access to the entire cottage. No spaces are shared with other guests.",,PC Bhurban,https://maps.app.goo.gl/R3qsW38PYZPY5YMH8?g_st=aw,,,,,,,
+,,22.0,What is the address of Swiss Cottages Bhurban?,"Swiss Cottages is located in the scenic Murree Hills at Bhurban, adjacent to Pearl Continental (PC) Bhurban, making it very easy to find and access. The cottages are situated in a peaceful and secure area, offering beautiful mountain views while still being close to major attractions and facilities.
+
+📍 Address:
+Swiss Cottages, adjacent to PC Bhurban,
+Bhurban, Murree Hills, Pakistan.                                                         ",,,,,,,,,,
+,,23.0,What is the exact location of Swiss Cottages?,"Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban.                                            🔘 View on Google Maps
+👉 https://goo.gl/maps/PQbSR9DsuxwjxUoU6",,,,,,,,,,
+,,24.0,How far are the cottages from PC Bhurban and main attractions?,"
+PC Bhurban is approximately a 2-minute drive or a 5-minute walk from the cottages. Most major attractions are nearby and easily accessible.",,,,,,,,,,
+,,25.0,How do you ensure privacy and cleanliness?,"Swiss Cottages is a privately owned property where privacy, cleanliness, and top-quality service are given the highest priority. Each booking is for an entire private cottage, and thorough cleaning is done before every guest stay to maintain high standards.",,,,,,,,,,
+,,26.0,How is the view from the cottages?,"
+The views from the cottages vary depending on the cottage number, room location, and floor level. Guests can enjoy mountain views, valley views, and lush greenery across the property. Some rooms on the ground floor or basement level offer pleasant greenery or surrounding views rather than open valley views. Cottage 7 is a corner unit and is unique in that it offers dual-sided views, allowing guests to enjoy both mountain and valley views from different sides of the cottage. Overall, every cottage provides a scenic and peaceful environment, with views differing slightly by room and layout.",,,,,,,,,,
+,,27.0,How is the balcony view from the cottages?,"
+The balconies offer beautiful valley and mountain views, providing a scenic and relaxing environment for guests.",,,,,,,,,,
+,,28.0,Is Swiss Cottages suitable for families and groups?,"Yes, Swiss Cottages is ideal for families and groups. The cottages are spacious, private, and located in a peaceful environment with easy access to nearby attractions and facilities.",,,,,,,,,,
+,,29.0,What help or support is available during the stay?,"Guests are supported by an on-site caretaker who assists with check-in, daily needs, and any issues during the stay. A chef is also available on request to prepare freshly cooked meals for guests.",,,,,,,,,,
+,,30.0,Is there a kitchen available in the cottages?,"Yes, each cottage has a fully functional kitchen where guests can cook their own meals. Guests may also choose to avail chef services by paying an additional fee.",,,,,,,,,,
+,,31.0,Is car parking available at the cottage?,"Yes, free, secure parking is available inside the gated community. Each cottage can accommodate up to two cars.",,,,,,,,,,
+,,32.0,Do you offer chef services?,"Yes, a chef can be arranged on request to prepare freshly made food for guests. This service is available at an additional cost and must be requested in advance.",,,,,,,,,,
+,Facilities & Amenities,33.0,What facilities are available at the cottages?,"Swiss Cottages offers fully furnished cottages with bedrooms, bathrooms, a living lounge, fully equipped kitchen, heating system, Wi-Fi, Smart TV with Netflix, hot water, electricity backup, BBQ facilities, outdoor sitting areas, and secure parking inside a gated community.",,,,,,,,,,
+,,34.0,What amenities are included in the cottages?,"Each cottage includes Wi-Fi, Smart TV, heating, hot water, furnished bedrooms, living areas, kitchen facilities, terrace or balcony, and secure parking within a gated community. A complementary bar is also offered",,,,,,,,,,
+,,35.0,Is Wi-Fi available?,"Yes, Wi-Fi is available in all cottages and is suitable for regular browsing, streaming, and work-related use.",,,,,,,,,,
+,,36.0,Do the cottages have heating?,"Yes, heating arrangements are available, making the cottages suitable for winter stays and cold weather in Bhurban.",,,,,,,,,,
+,,37.0,Are BBQ facilities available?,,,,,,,,,,,
+,,38.0,Do you guys provide BonFire,,,,,,,,,,,
+,,39.0,"Are towels, tissues, and basic toiletries provided?","Yes, towels, tissues, and basic toiletries are provided for guest convenience.",,,,,,,,,,
+,,40.0,What heating and cooling facilities are available?,"The cottages have centralized heating in the lounge areas and electric heaters in the rooms for winter. During summer, ceiling fans are available and sufficient due to the cool climate.",,,,,,,,,,
+,,41.0,Is parking available?,"Yes, free and secure on-site parking is available for guests within the gated community.",,,,,,,,,,
+,,42.0,What is the maximum number of guests allowed in each cottage?,"A 3-bedroom cottage can accommodate up to 10 guests, while a 2-bedroom cottage can accommodate up to 6 guests comfortably.",,,,,,,,,,
+,,43.0,What is the maximum number of guests that can be accommodated for corporate or group bookings?,"For corporate events or large group stays, Swiss Cottages can accommodate guests across up to 7 cottages within the same neighborhood, subject to availability. This setup allows large teams or corporate groups to stay close together while maintaining comfort, privacy, and a peaceful environment. Guests are accommodated across multiple cottages rather than a single unit, making it ideal for retreats, off-site meetings, or group getaways.",,,,,,,,,,
+,,44.0,Are the cottages furnished and fully equipped?,"Yes, all cottages are fully furnished and equipped with essential furniture, appliances, and amenities for a comfortable stay.",,,,,,,,,,
+,,45.0,Do the cottages have heating for winter and cooling for summer?,"Yes, cottages have centralized heating in the lounge areas and electric heaters in the rooms for winter. During summer, ceiling fans are available and sufficient due to Bhurban’s pleasant weather.",,,,,,,,,,
+,,46.0,"Is there a kitchen, and what appliances are included?","Yes, each cottage has a fully functional kitchen equipped with a microwave, oven, kettle, refrigerator, cookware, and basic utensils.",,,,,,,,,,
+,,47.0,Is hot water available?,"Yes, instant electric geysers are installed to ensure hot water availability at all times.",,,,,,,,,,
+,,48.0,Is electricity backup available?,"Yes, the property is supported by UPS and Backup generator to handle electricity outages.",,,,,,,,,,
+,,49.0,Is Netflix available?,"Yes, Netflix is available on the Smart TV for guest entertainment.",,,,,,,,,,
+,,50.0,Are blankets and basic supplies provided?,"Yes, blankets and essential basic supplies are provided to ensure guest comfort.",,,,,,,,,,
+,,51.0,Is parking available on-site and how many cars can be parked?,"Yes, on-site parking is available. Parking space is limited and can accommodate 2 cars per cottage.",,,,,,,,,,
+,Services & Rules,52.0,What services do you offer?,"Swiss Cottages offers booking assistance, caretaker support during the stay, optional cooking or chef services, housekeeping support, and hosting services for cottage owners.",,,,,,,,,,
+,,53.0,Is a caretaker available?,"Yes, a caretaker or on-site support person is available to assist guests with check-in, basic needs, and any issues during the stay.",,,,,,,,,,
+,,54.0,Do you provide cooking or chef services?,Cooking or chef services can be arranged on request. Guests can also use the kitchen to prepare their own meals.,,,,,,,,,,
+,,55.0,Are families and children allowed?,"Yes, Swiss Cottages primarily accommodates families and children. Unmarried couples are not accommodated.",,,,,,,,,,
+,,56.0,Is the cottage pet-friendly?,Pets may be allowed with prior permission. Guests must seek approval from management before booking or visiting with pets.,,,,,,,,,,
+,,57.0,What are the check-in and check-out times?,"Check-in starts from 1:30 PM onwards, and check-out is at 12:00 PM sharp.",,,,,,,,,,
+,,58.0,Is early or late check-in possible?,"Early or late check-in may be allowed subject to availability. Guests must request approval from the manager in advance, and additional charges may apply.",,,,,,,,,,
+,,59.0,Are functions or parties allowed?,"No, functions and parties are not allowed. Any special accommodation requests must be approved by the manager in advance.",,,,,,,,,,
+,,60.0,Are friend groups allowed?,Male friend groups are allowed to stay at the cottages.,,,,,,,,,,
+,,61.0,Is a servant quarter available?,"No, servant quarters are not available. However, hotel rooms can be arranged nearby for drivers or house help if required.",,,,,,,,,,
+,Location & Surroundings,62.0,Where are Swiss Cottages located?,"Swiss Cottages are located in Bhurban, Murree, within a secure gated community near Pearl Continental Bhurban and Chinar Golf Course.",,,,,,,,,,
+,,63.0,How far is it from Islamabad?,"Swiss Cottages is approximately a 1.5 hour drive from Islamabad, depending on traffic and weather conditions.",,,,,,,,,,
+,,64.0,"Is the road access easy, especially in rain or fog?","
+Yes, the road access is smooth and suitable for normal vehicles. Guests can comfortably reach the cottages even during rain or fog.",,,,,,,,,,
+,,65.0,What places are nearby?,"Swiss Cottages Bhurban is ideally located in a prime area of Bhurban, offering quick and easy access to major attractions and daily conveniences. Guests can reach Pearl Continental (PC) Bhurban in just 2 minutes, making it convenient for dining, events, and scenic walks. The Chinar Golf Club is only 5 minutes away, perfect for golf enthusiasts and leisure outings. A nearby masjid is located just 2 minutes from the cottages, allowing easy access for prayers. For daily needs and shopping, the local market is only 5 minutes away, where guests can find groceries, essentials, and small eateries. In addition, the surrounding area features beautiful pine forests and scenic walking trails, ideal for nature lovers and morning or evening walks.                                                                                                                                                                             Azad Kashmir View Point (near PC Bhurban)
+👉 https://maps.app.goo.gl/vcvDmZ2KTg2An3WK6
+
+Hiking Trail (near Hotel One Bhurban)
+👉 https://maps.app.goo.gl/ELzmaMnqv8NjSTTg9
+
+Walking Trail (near Governor House Bhurban)
+👉 https://maps.app.goo.gl/9zLdWCcYYEEb77Fh7
+
+Chinar Golf Club
+👉 https://maps.app.goo.gl/DEoq4X5HTXsQ5ZDTA
+
+Pearl Continental (PC) Bhurban
+👉 https://maps.app.goo.gl/R3qsW38PYZPY5YMH8",,,,,,,,,,
+,,66.0,What sightseeing options are available nearby?,"Guests can visit Chinar Golf Club, PC Bhurban, Governor House Bhurban, scenic viewpoints overlooking Azad Kashmir, and other nearby picnic and sightseeing spots.",,,,,,,,,,
+,,67.0,Are there walking or hiking trails nearby?,"
+Yes, there are multiple walking and hiking trails nearby, including trails around PC Bhurban, Chinar Golf Club, near Hotel One, and the Governor House area.           Hiking Trail (near Hotel One Bhurban)
+👉 https://maps.app.goo.gl/ELzmaMnqv8NjSTTg9
+
+Walking Trail (near Governor House Bhurban)
+👉 https://maps.app.goo.gl/9zLdWCcYYEEb77Fh7",,,,,,,,,,
+,,68.0,Are there restaurants nearby?,"
+Yes, several restaurants are nearby, including PC Bhurban fine dining, Chinar Golf Club restaurant, TRK, and multiple local restaurants.",,,,,,,,,,
+,,69.0,Are there restaurants or eateries/ restaurants nearby?,"Yes, several dining options are nearby, including fine dining at PC Bhurban, Chinar Golf Club, TKR, and many local restaurants. Guests can also choose to dine in by availing chef services at the cottage.",,,,,,,,,,
+,,70.0,Is there a heating system in the cottages?,"Yes, the cottages are equipped with a centralized heated lounge area and electric heaters in the bedrooms, making them comfortable for winter stays.",,,,,,,,,,
+,,71.0,What activities can we do near Swiss Cottages?,"Guests can enjoy various activities such as hiking near PC Bhurban and Chinar Golf Club, visiting viewpoints overlooking Azad Kashmir, exploring hiking trails near Hotel One, and taking a drive to Patriata Chairlift, which is approximately 30 minutes away.",,,,,,,,,,
+,,72.0,Is Swiss Cottages good for weekend getaways?,"Yes, due to its close proximity to Islamabad and its peaceful location, Swiss Cottages is a popular choice for weekend and short getaways.",,,,,,,,,,
+,,73.0,What nearby picnic spots and day-trip locations are available?,"Nearby attractions include Chinar Golf Club, hiking trails near PC Bhurban, Governor House Bhurban, scenic viewpoints overlooking Azad Kashmir, and other popular picnic spots.",,,,,,,,,,
+,,74.0,What activities can guests enjoy nearby?,"Guests can enjoy hiking, scenic walks, sightseeing, and a drive to Patriata Chairlift, which is approximately 30 minutes away.",,,,,,,,,,
+,,75.0,What is the maximum number of guests across all cottages?,"On average, one cottage accommodates around 8 guests. There are 7 cottages in the neighborhood, allowing larger groups to book multiple cottages together.",,,,,,,,,,
+,,76.0,What is the maximum number of guests for corporate bookings?,"For corporate or large group bookings, up to 7 cottages can be booked together to accommodate larger groups, subject to availability.",,,,,,,,,,
+,,77.0,Do the cottages have a mountain or valley view?,"Yes, cottages offer mountain views, valley views, or greenery views depending on their position within the community.",,,,,,,,,,
+,,78.0,"Is there a balcony, lawn, or outdoor sitting area?","Yes, all cottages have access to outdoor spaces including balconies, lawns, sitting areas, greenery, and walking pathways.",,,,,,,,,,
+,,79.0,Are BBQ facilities available?,"Yes, BBQ facilities and grills are available for guests.",,,,,,,,,,
+,Images & Media,80.0,Where can I see pictures of the cottages?,"You can view real images of the cottages on the Swiss Cottages website, Airbnb listings, or request photos and videos directly via WhatsApp.                               🔘 View Website Gallery
+👉 https://swisscottagesbhurban.com/
+
+🔘 View Instagram
+👉 https://www.instagram.com/swiss_cottages_bhurban/
+
+🔘 View Airbnb – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 View Airbnb – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,81.0,Are the images real?,"Yes, all images shown are of the actual cottages to ensure transparency and accurate expectations for guests.                                                                                🔘 See Real Guest Photos (Cottage 9)
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 See Real Guest Photos (Cottage 11)
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,Availability & Dates,82.0,How can I check availability?,"You can check availability by sharing your preferred dates and number of guests via the website, Airbnb, or WhatsApp. Availability is confirmed quickly by the team.
+CTA buttons
+
+🔘 Check Availability
+👉 (Use once Calendar link is available – keep placeholder for now)
+
+🔘 Contact Us
+👉 https://swisscottagesbhurban.com/contact-us/
+
+🔘 View Website
+👉 https://swisscottagesbhurban.com/",Connect to calendar to check availibility [Dates],,,,,,,,,
+,,83.0,Are cottages available year-round?,"Yes, Swiss Cottages are available throughout the year, including peak summer and winter seasons, subject to availability.",,,,,,,,,,
+,Pricing & Payments,84.0,What are the prices for Cottage 11?,"Cottage 11 pricing (up to 6 guests) is approximately PKR 32,000 per night on weekends and PKR 26,000 per night on weekdays.                                                                                                 🔘 View on Airbnb – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842
+
+🔘 Request Custom Quote
+👉 https://swisscottagesbhurban.com/contact-us/",,,,,,,,,,
+,,85.0,What are the prices for Cottage 9?,"Cottage 9 pricing (up to 6 guests) is approximately PKR 38,000 per night on weekends and PKR 33,000 per night on weekdays.                                                                                                          🔘 View on Airbnb – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 Request Custom Quote
+👉 https://swisscottagesbhurban.com/contact-us/",,,,,,,,,,
+,,86.0,What is the difference between Cottage 9 and Cottage 11?,"
+The main differences are in size, furniture layout, balcony or terrace space, and overall layout. Cottage 11 is generally larger, while Cottage 9 is more compact but equally well equipped.",,,,,,,,,,
+,,87.0,How many bedrooms and bathrooms are in each cottage?,"
+Each 3-bedroom cottage has one bedroom with an attached bathroom, while the remaining two bedrooms share a common bathroom.",,,,,,,,,,
+,,88.0,Do you offer discounts?,"Yes, discounts may be available for first-time guests, longer stays, or promotional periods. Please share your dates to get the best available offer.",,,,,,,,,,
+,,89.0,Do you offer early booking discounts?,"Yes, early bookings may qualify for special pricing depending on the season and availability. Booking in advance often helps secure better rates and preferred dates.",,,,,,,,,,
+,,90.0,Can prices be negotiated?,"Pricing may be flexible in certain situations such as early bookings, weekday stays, longer stays, or off-season dates. Please share your dates and requirements so we can check the best possible offer for you.",Negociation Criteria is missing [If needed],,,,,,,,,
+,,91.0,What payment methods do you accept?,"We accept bank transfers and cash payments. A partial payment is required at the time of booking to confirm the reservation, and the remaining amount is paid at the time of check-in.",,,,,,,,,,
+,,92.0,"Do prices vary on weekends, holidays, or peak season?","Yes, prices vary depending on weekdays, weekends, holidays, and peak tourist seasons.",,,,,,,,,,
+,,93.0,Is there a minimum stay requirement?,"Yes, the minimum stay requirement is one night.",,,,,,,,,,
+,,94.0,What is the advance payment or booking confirmation process?,A partial advance payment is required at the time of booking to confirm the reservation. The remaining amount is payable at the time of check-in.,,,,,,,,,,
+,,95.0,What is the maximum number of guests allowed in each cottage?,"
+A 3-bedroom cottage can accommodate up to 10 guests, while a 2-bedroom cottage can accommodate up to 6 guests comfortably.",,,,,,,,,,
+,,96.0,Is a discount available for longer stays?,"
+Yes, discounts are available for longer stays depending on the number of nights and dates. Guests are advised to contact the manager to confirm the best available rate.",,,,,,,,,,
+,,97.0,Can you help me get the best deal?,"Absolutely. Share your dates, number of guests, and flexibility, and I’ll help you find the best available rate or offer.                                                                                                    🔘 Request Custom Quote
+👉 https://swisscottagesbhurban.com/contact-us/",,,,,,,,,,
+,Booking,98.0,How do I book a cottage?,"You can book a cottage through Airbnb, directly via our website, or by submitting a booking request using the “Book Now” button. For personalized assistance, special requests, or quick confirmation, you can also contact our manager directly via WhatsApp or phone, and our team will guide you through the booking process step by step. 🔘 Book via Website
+👉 https://swisscottagesbhurban.com/
+
+🔘 Book on Airbnb (Cottage 9)
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 Book on Airbnb (Cottage 11)
+👉 https://www.airbnb.com/rooms/886682083069412842
+
+🔘 Contact Us
+👉 https://swisscottagesbhurban.com/contact-us/",,,,,,,,,,
+,,99.0,What details are required to book?,"To confirm a booking, we need your dates, number of guests, whether the stay is for family or friends, and your preferred cottage.",,,,,,,,,,
+,,100.0,Do you provide booking confirmation?,"Yes, once the booking is confirmed, you receive a clear confirmation message with stay details and check-in instructions.",,,,,,,,,,
+,Cancellation & Refunds,101.0,What is the cancellation policy?,Cancellation and refund policies depend on whether the booking is made via Airbnb or directly. The exact policy is shared clearly at the time of booking.,,,,,,,,,,
+,,102.0,Will I get a refund if I cancel?,"Refund eligibility depends on cancellation timing and booking terms. Please review the policy shared during booking or contact support for clarification.                                           🔘 Contact Manager                                                                                                                                                                                                                         👉 923001218563
+",,,,,,,,,,
+,,103.0,Is booking cancellation possible?,"Cancellation and refund terms vary based on the booking platform and timing. Guests are advised to review the policy shared at the time of booking or contact the management for detailed clarification before confirming their stay.                                                                                                                                                                                                     🔘 Contact Manager                                                                                                                                                                                                                         👉 923001218563
+",,,,,,,,,,
+,,104.0,Is the cancellation policy different for direct bookings and Airbnb bookings?,"Yes, Airbnb bookings follow Airbnb’s cancellation policies, while direct bookings follow the terms shared by management at the time of confirmation. Guests are encouraged to confirm the applicable policy before booking.",,,,,,,,,,
+,Check-in & Check-out,105.0,What is the check-in process?,"After booking confirmation, guests receive arrival instructions. On arrival, the caretaker assists with access, keys, and a brief orientation of the cottage.",,,,,,,,,,
+,,106.0,What is the check-out process?,"Guests simply inform the caretaker, return keys as instructed, and vacate the cottage at the agreed check-out time.",,,,,,,,,,
+,,107.0,How do guests check in at the cottage?,"After booking confirmation, guests receive the caretaker’s contact details. Guests are requested to contact the caretaker approximately one hour before arrival, and the caretaker assists with check-in and access to the cottage.",,,,,,,,,,
+,,108.0,Is early check-in or late check-out available?,Early check-in or late check-out may be possible depending on availability and should be requested in advance.,,,,,,,,,,
+,Safety & Security,109.0,Is Swiss Cottages secure?,"Yes, the cottages are located within a gated community with security staff and surveillance, making it a safe option for families and groups.",,,,,,,,,,
+,,110.0,Is the cottage located in a gated or secure community?,"
+Yes, Swiss Cottages is located in a gated community of 12 cottages with two security guards on duty for guest safety.",,,,,,,,,,
+,Verification & Compliance,111.0,Is guest verification required?,Guests may be asked to provide valid identification at booking or check-in as part of standard security and community guidelines.,,,,,,,,,,
+,Damage & Liability,112.0,What happens if something is damaged?,"In case of damage, photos are taken, the loss is evaluated, and guests may be requested to cover the cost of repair or replacement.",,,,,,,,,,
+,Guest Support,113.0,Who do I contact during my stay?,Guests can contact the on-site caretaker for immediate help or reach out to the host via WhatsApp or booking platform for additional support.,,,,,,,,,,
+,,114.0,Can you show me some customer reviews?,"Yes, you can view genuine customer reviews on our Airbnb listings for Swiss Cottages. Guests have consistently rated the cottages highly for cleanliness, location, comfort, and host responsiveness. These reviews reflect real guest experiences and help new visitors book with confidence.                                                                                        🔘 Read Airbnb Reviews – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 Read Airbnb Reviews – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,115.0,Where can I read verified guest feedback?,"Verified guest feedback is available on Airbnb, where only guests who have completed a stay can leave reviews. This ensures transparency and authentic feedback about Swiss Cottages.                                                                                                                                                                                                                                   🔘 Read Airbnb Reviews – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+🔘 Read Airbnb Reviews – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,116.0,"Who should I contact for booking, check-in, or general assistance?","For bookings, availability, pricing, and general queries, guests can reach out to the cottage management. Assistance details are shared once the booking is confirmed.   Contact Cottage Manager (Abdullah)
+👉 +923001218563
+
+Visit Official Website
+👉 https://swisscottagesbhurban.com/",,,,,,,,,,
+,,117.0,Is there an on-site caretaker available during the stay?,"Yes, an on-site caretaker is available to assist guests with check-in, orientation, and any basic needs during their stay.",,,,,,,,,,
+,,118.0,Who is the owner or main point of contact for Swiss Cottages Bhurban?,"Swiss Cottages Bhurban is professionally managed by a dedicated management team that oversees guest coordination, property operations, and service quality.",,,,,,,,,,
+,,119.0,Who should I contact for security concerns during my stay?,"Swiss Cottages is located in a gated community with security arrangements. For any security-related concerns, guests can contact on-ground security staff or management for assistance.                                                                       Contact Cottage Manager (Abdullah)
+👉 +923001218563",,,,,,,,,,
+,,120.0,Is there security at the main gate of the cottage community?,"Yes, the gated community has security personnel stationed at the main gate to monitor access and ensure guest safety at all times.",,,,,,,,,,
+,,121.0,Who is the on-site caretaker at Swiss Cottages and when should I contact him?,"Jaafar is the on-site caretaker at Swiss Cottages. Guests can contact him for assistance during their stay, including check-in support, orientation, and help with basic needs.                                                                            📞 Caretaker (Jaafar): +92 301 5111817",,,,,,,,,,
+,,122.0,Who is the cottage manager and how can I contact him?,"Abdullah is the cottage manager at Swiss Cottages Bhurban. Guests can contact him for bookings, availability, pricing, special requests, and general assistance before or during their stay. 📞 Cottage Manager (Abdullah): +92 300 1218563",,,,,,,,,,
+,,123.0,Is there an alternate contact number for the cottage manager?,"Yes, an alternate personal contact number for the cottage manager is available for urgent matters if required. 📞 Cottage Manager (Personal): +92 327 8837088",,,,,,,,,,
+,,124.0,Who is the business owner of Swiss Cottages Bhurban?,"Swiss Cottages Bhurban is owned by Huzaifa, who oversees the overall business operations and management. For escalations or special matters, guests may be guided to contact the owner through management. 📞 Business Owner (Huzaifa): +92 300 0416198",,,,,,,,,,
+,,125.0,Who is responsible for security at the main gate of the community?,The main gate of the gated community is managed by on-site security staff. Shafeeq is the security in-charge responsible for monitoring access and ensuring guest safety at the main gate. 📞 Security In-Charge (Shafeeq): +92 345 9628504,,,,,,,,,,
+,Host / Owner / POC,126.0,Who is the point of contact?,"The primary point of contact is the host and the on-site caretaker, whose contact details are shared after booking confirmation.",,,,,,,,,,
+,,127.0,How can I contact the manager or owner of Swiss Cottages Bhurban?,"For bookings, availability, pricing, or any other inquiries, you can contact the manager/owner of Swiss Cottages directly. The management team is available to assist you with reservations, special requests, and personalized support to ensure a smooth booking experience.
+
+📞 Contact Number (Manager / Owner):
++92 300 1218563",,,,,,,,,,
+,AI Assisted Help,128.0,Can you help me choose the right cottage?,"Yes! Share your dates, number of guests, and preferences, and I will recommend the best available cottage for your stay.                                                             🔘 Help Me Choose
+👉 https://swisscottagesbhurban.com/contact-us/",,,,,,,,,,
+,Food ,129.0,Are there restaurants or eateries/ restaurants nearby?,"Yes, several dining options are nearby, including fine dining at PC Bhurban, Chinar Golf Club, TKR, and many local restaurants. Guests can also choose to dine in by availing chef services at the cottage.",,,,,,,,,,
+,,130.0,Is food delivery available?,"Yes, food delivery is available from nearby local restaurants. Guests can also enjoy BBQ facilities or avail chef services for freshly prepared meals at an additional cost.",,,,,,,,,,
+,,131.0,What food arrangements are available?,"Guests can cook their own meals, order food delivery, or avail chef services at an additional cost.",,,,,,,,,,
+,,132.0,Is breakfast included?,Breakfast is optional and can be arranged on request.,,,,,,,,,,
+,,133.0,Are grocery stores easily available nearby?,"Yes, multiple grocery stores are located nearby for daily essentials.",,,,,,,,,,
+,,134.0,Is a pharmacy available nearby?,"Yes, pharmacies are available within a 20-minute drive, including in areas such as Ghinga Gali.",,,,,,,,,,
+,Fallback & General,135.0,Can I talk to a human?,"Yes, I can connect you to a human representative via WhatsApp or phone whenever you need personal assistance.",,,,,,,,,,
+,,136.0,Do you have social media pages?,"Yes, Swiss Cottages maintains an active online presence where we share property photos, short videos, reels, and updates. These platforms help guests see real visuals of the cottages and stay updated with new offers or announcements.
+
+🔘 Instagram
+👉 https://www.instagram.com/swiss_cottages_bhurban/
+
+🔘 Facebook
+👉 https://www.facebook.com/people/Swiss-Cottages-Bhurban/100095024470541/",,,,,,,,,,
+,,137.0,Where can I see more photos or videos of the cottages?,"You can explore additional photos and videos on our social media pages, in addition to the images available on our website and Airbnb listings. If you’d like the most recent visuals, our team can also share updated photos or reels directly on WhatsApp.
+🔘 Instagram Reels
+👉 https://www.instagram.com/swiss_cottages_bhurban/
+
+🔘 Website Gallery
+👉 https://swisscottagesbhurban.com/",,,,,,,,,,
+,,138.0,Are the cottages private?,"Yes, each booking is for an entire private cottage. No spaces are shared with other guests.",,,,,,,,,,
+,,139.0,Are the photos shown real?,"Yes, all photos displayed on the website and Airbnb listings are of the actual cottages to ensure transparency and accurate expectations.",,,,,,,,,,
+,,140.0,Do you have good guest reviews?,"Yes, Swiss Cottages has strong and positive guest reviews on Airbnb, where guests frequently praise the location, cleanliness, comfort, and host support.",,,,,,,,,,
+,,141.0,Is Swiss Cottages safe?,"Yes, Swiss Cottages is located inside a gated community with security arrangements, making it safe for families, couples, and group stays.",,,,,,,,,,
+,,142.0,Is Swiss Cottages open all year?,"Yes, Swiss Cottages operates year-round and welcomes guests during summer, winter, and holiday seasons, subject to availability.",,,,,,,,,,
+,,143.0,Is Swiss Cottages good for weekend getaways?,"Yes, due to its close distance from Islamabad and peaceful surroundings, Swiss Cottages is a popular choice for weekend and short getaways.",,,,,,,,,,
+,,144.0,Why should I choose Swiss Cottages Bhurban?,"Swiss Cottages combines a prime location, scenic views, privacy, modern amenities, and personalized service, making it an excellent choice for a comfortable and memorable stay in Bhurban.",,,,,,,,,,
+,,145.0,Why should I choose Swiss Cottages Bhurban?,"Swiss Cottages offers a combination of prime location, privacy, scenic beauty, modern amenities, and personalized service, making it an excellent choice for a comfortable and memorable stay in Bhurban.",,,,,,,,,,
+,Reviews,146.0,Where can I read reviews for Swiss Cottages Bhurban?,"Guests can read verified reviews for Swiss Cottages on Airbnb, where only guests who have completed a stay are allowed to leave feedback.                              Read Airbnb Reviews – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+Read Airbnb Reviews – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,147.0,Are the reviews for Swiss Cottages genuine and verified?,"Yes, all reviews available on Airbnb are verified and written by guests who have actually stayed at Swiss Cottages, ensuring authenticity and transparency.             View Verified Airbnb Reviews (Cottage 9)
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+View Verified Airbnb Reviews (Cottage 11)
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,148.0,What do guests usually like most about Swiss Cottages?,"Guests frequently appreciate the scenic views, cleanliness, peaceful environment, privacy, spacious cottages, and the helpfulness of the caretaker and management team.",,,,,,,,,,
+,,149.0,How are Swiss Cottages rated by guests?,"Swiss Cottages has received consistently positive ratings from guests, reflecting satisfaction with comfort, location, cleanliness, and overall stay experience.",,,,,,,,,,
+,,150.0,Can I read reviews specific to each cottage?,"Yes, reviews can be viewed separately on Airbnb for each cottage listing, allowing guests to see feedback specific to Cottage 9, Cottage 11, or other available units.    Reviews – Cottage 9
+👉 https://www.airbnb.com/rooms/651168099240245080
+
+Reviews – Cottage 11
+👉 https://www.airbnb.com/rooms/886682083069412842",,,,,,,,,,
+,,151.0,Are there any recent reviews available?,"Yes, Airbnb displays reviews in chronological order, allowing guests to view the most recent feedback from recent stays at Swiss Cottages.",,,,,,,,,,
+,,152.0,Do guests mention cleanliness and hygiene in their reviews?,"Yes, cleanliness and hygiene are frequently highlighted in guest reviews as one of the strong points of Swiss Cottages.",,,,,,,,,,
+,,153.0,Do reviews mention the caretaker or guest support?,"Many guest reviews positively mention the on-site caretaker and management for their responsiveness, support, and smooth check-in experience.",,,,,,,,,,
+,,154.0,What if I am unsure after reading the reviews?,Guests who need further reassurance or clarification after reading reviews are encouraged to contact the management directly for personalized assistance.,,,,,,,,,,
+,,155.0,Are reviews available outside of Airbnb?,"Currently, the most reliable and verified reviews for Swiss Cottages are available on Airbnb, as the platform ensures that only confirmed guests can leave feedback.",,,,,,,,,,
+,Weather ,156.0,What is the weather like at Swiss Cottages throughout the year?,"Swiss Cottages enjoys pleasant weather for most of the year, making it a comfortable destination in all seasons.",,,,,,,,,,
+,,157.0,Does it snow at Swiss Cottages?,"Yes, snowfall usually occurs from late January to mid-February, depending on weather conditions.",,,,,,,,,,
+,,158.0,Is the cottage suitable for winter stays?,"Yes, the cottages are suitable for winter stays and are equipped with heating to keep guests comfortable during cold and snowy weather.",,,,,,,,,,
+,,159.0,What is the weather like during summer?,Summers are mild and comfortable due to the naturally pleasant climate.,,,,,,,,,,
+,,160.0,Do the cottages have air conditioning for summer?,Air conditioning is not required as the weather remains pleasant; ceiling fans are sufficient for guest comfort.,,,,,,,,,,
+,,161.0,Can weather affect travel to Swiss Cottages?,"Travel time may vary during winter due to snowfall, so guests are advised to check weather and road conditions before traveling.",,,,,,,,,,
+,,162.0,Are roads accessible during snowfall?,"Yes, during snowfall the access roads are cleared regularly to ensure safe and convenient travel for guests.",,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,Who is the on-site caretaker at Swiss Cottages and when should I contact him?,"Jaafar is the on-site caretaker at Swiss Cottages. Guests can contact him for assistance during their stay, including check-in support, orientation, and help with basic needs. 📞 Caretaker (Jaafar): +92 301 5111817"
+,,,,,,,,,,,,,Who is the cottage manager and how can I contact him?,"Abdullah is the cottage manager at Swiss Cottages Bhurban. Guests can contact him for bookings, availability, pricing, special requests, and general assistance before or during their stay. 📞 Cottage Manager (Abdullah): +92 300 1218563"
+,,,,,,,,,,,,,Is there an alternate contact number for the cottage manager?,"Yes, an alternate personal contact number for the cottage manager is available for urgent matters if required. 📞 Cottage Manager (Personal): +92 327 8837088"
+,,,,,,,,,,,,,Who is the business owner of Swiss Cottages Bhurban?,"Swiss Cottages Bhurban is owned by Huzaifa, who oversees the overall business operations and management. For escalations or special matters, guests may be guided to contact the owner through management. 📞 Business Owner (Huzaifa): +92 300 0416198"
+,,,,,,,,,,,,,Who is responsible for security at the main gate of the community?,The main gate of the gated community is managed by on-site security staff. Shafeeq is the security in-charge responsible for monitoring access and ensuring guest safety at the main gate. 📞 Security In-Charge (Shafeeq): +92 345 9628504
