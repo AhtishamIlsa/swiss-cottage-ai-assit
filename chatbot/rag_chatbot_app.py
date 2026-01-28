@@ -149,7 +149,7 @@ def display_cottage_images(cottage_numbers: list[str], root_folder: Path):
 
 
 @st.cache_resource()
-def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2") -> LamaCppClient | GroqClient:
+def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2"):
     """
     Load LLM client - either Groq API (fast) or local model (slower but offline).
     
