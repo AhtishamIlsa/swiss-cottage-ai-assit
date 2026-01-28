@@ -7,7 +7,7 @@ import os
 
 import streamlit as st
 from bot.client.groq_client import GroqClient
-from bot.client.lama_cpp_client import LamaCppClient
+# LamaCppClient imported lazily only when needed (not for Streamlit Cloud/Groq)
 from bot.conversation.chat_history import ChatHistory
 from bot.conversation.conversation_handler import answer_with_context, extract_content_after_reasoning, refine_question
 from bot.conversation.intent_router import IntentRouter, IntentType
