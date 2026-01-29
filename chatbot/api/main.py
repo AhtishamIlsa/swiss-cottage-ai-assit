@@ -1080,10 +1080,26 @@ async def chat(
                 
                 # Generate answer with context (same as Streamlit)
                 max_new_tokens = request.max_new_tokens or 512
+                
+                # Enhance question with slot information for pricing/booking queries
+                enhanced_question = refined_question
+                if intent in [IntentType.PRICING, IntentType.BOOKING] and slot_manager.get_slots():
+                    slots = slot_manager.get_slots()
+                    slot_info_parts = []
+                    if slots.get("nights"):
+                        slot_info_parts.append(f"for {slots['nights']} nights")
+                    if slots.get("guests"):
+                        slot_info_parts.append(f"for {slots['guests']} guests")
+                    if slots.get("room_type"):
+                        slot_info_parts.append(f"in {slots['room_type']}")
+                    if slot_info_parts:
+                        # Append slot info to question to make it explicit for LLM
+                        enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
+                
                 streamer, _ = answer_with_context(
                     llm,
                     ctx_synthesis_strategy,
-                    refined_question,
+                    enhanced_question,  # Use enhanced question with slot info
                     chat_history,
                     retrieved_contents,
                     max_new_tokens,
