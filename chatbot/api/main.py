@@ -1225,8 +1225,40 @@ async def chat(
                 # Only ask for missing slots if they're actually needed for the current intent
                 # Don't ask if user is just asking informational questions
                 # IMPORTANT: Don't ask for slots that were just provided in this turn
+                # IMPORTANT: Don't ask if user is responding affirmatively to a recommendation
                 missing_slot = None
-                if intent in [IntentType.BOOKING, IntentType.PRICING, IntentType.AVAILABILITY]:
+                
+                # Check if user is responding affirmatively to a recommendation
+                is_affirmative_response = False
+                query_lower = request.question.lower().strip()
+                affirmative_patterns = [
+                    r"^yes\s+(?:recommend|please|go ahead|sure|ok)",
+                    r"^yes$",
+                    r"^ok(?:ay)?$",
+                    r"^sure$",
+                    r"^go ahead$",
+                    r"^please$",
+                    r"^recommend me$",
+                    r"^yes recommend",
+                ]
+                for pattern in affirmative_patterns:
+                    if re.match(pattern, query_lower):
+                        is_affirmative_response = True
+                        logger.info(f"Detected affirmative response to recommendation: '{request.question}'")
+                        break
+                
+                # Check if last bot message was a recommendation
+                last_bot_message = None
+                if chat_history and len(chat_history) > 0:
+                    last_message = chat_history[-1]
+                    if isinstance(last_message, str) and "recommend" in last_message.lower():
+                        last_bot_message = last_message
+                
+                # Suppress follow-up if user is responding affirmatively to recommendation
+                if is_affirmative_response and last_bot_message:
+                    logger.info("User responding affirmatively to recommendation, suppressing follow-up question")
+                    missing_slot = None
+                elif intent in [IntentType.BOOKING, IntentType.PRICING, IntentType.AVAILABILITY]:
                     # Only ask for slots for booking/pricing/availability intents
                     try:
                         missing_slot = slot_manager.get_most_important_missing_slot(intent)

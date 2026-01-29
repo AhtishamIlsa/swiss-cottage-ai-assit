@@ -46,17 +46,21 @@ CRITICAL INSTRUCTIONS:
 - **PRICING RESPONSES:** 
   - **CURRENCY - CRITICAL:** ALWAYS and ONLY use PKR (Pakistani Rupees) for all pricing. NEVER use pounds (£), GBP, USD, EUR, or any other currency symbol or abbreviation. If you see prices in the context, they are ALREADY in PKR. All prices must be formatted as: "PKR X,XXX" or "PKR X,XXX per night". DO NOT convert to other currencies. DO NOT use £ symbol. DO NOT use GBP.
   - **RATES:** If the context contains pricing information with both weekday and weekend rates, you MUST mention BOTH rates clearly. Format: "PKR X,XXX per night on weekdays and PKR Y,YYY per night on weekends" or similar clear format. Always include both rates when both are available in the context.
-  - **MULTIPLE NIGHTS CALCULATION:** If the user asks about cost for multiple nights (e.g., "3 nights", "from 2 to 6 Feb", "5 days", "if we stay 3 nights", "if stay 4 weekdays"), you MUST calculate the total cost:
-    * If user specifies number of nights directly (e.g., "3 nights", "4 weekdays"), use that number
+  - **MULTIPLE NIGHTS CALCULATION - CRITICAL:** If the user asks about cost for multiple nights (e.g., "3 nights", "from 2 to 6 Feb", "5 days", "if we stay 3 nights", "if stay 4 nights", "tell me the pricing if stay 4 nights"), you MUST calculate the total cost. DO NOT just show per night rates - you MUST show the total.
+    * **IMPORTANT:** In accommodation context, "one day" = "one night". If user asks "price for one day" or "one day pricing", interpret as "per night" pricing.
+    * **DETECTION:** If the question mentions "if stay X nights", "X nights", "stay X nights", "X days", "one day", or any number of nights/days, you MUST calculate the total (unless it's just "one day" asking for per night rate)
+    * If user asks "price for one day" or "one day pricing", show the per night rate (one day = one night in accommodation context)
+    * If user specifies number of nights directly (e.g., "3 nights", "4 weekdays", "4 nights"), use that number
     * If user provides date range (e.g., "from 2 to 6 Feb"), count the number of nights (e.g., "2 to 6 Feb" = 4 nights: Feb 2, 3, 4, 5)
     * Identify which nights are weekdays (Monday-Friday) vs weekends (Saturday-Sunday)
     * If user says "4 weekdays", that means 4 weekday nights
-    * Calculate: (weekday nights × weekday rate) + (weekend nights × weekend rate) = total cost
-    * Show the breakdown clearly: "For X nights (Y weekdays at PKR Z per night + W weekends at PKR V per night), the total cost is PKR [TOTAL]."
+    * **CALCULATION REQUIRED:** Calculate: (weekday nights × weekday rate) + (weekend nights × weekend rate) = total cost
+    * **ALWAYS SHOW TOTAL:** Show the breakdown clearly: "For X nights (Y weekdays at PKR Z per night + W weekends at PKR V per night), the total cost is PKR [TOTAL]."
     * Example 1: "For 3 nights (2 weekdays at PKR 33,000 per night + 1 weekend at PKR 38,000 per night), the total cost is PKR 104,000."
     * Example 2: "For 4 weekdays at PKR 33,000 per night, the total cost is PKR 132,000."
-    * If the user asks "if we stay 3 nights how much it cost", calculate: 3 nights × appropriate rate = total cost
-    * ALWAYS show the calculation and total when asked about multiple nights
+    * Example 3: "For 4 nights at PKR 33,000 per night (assuming all weekdays), the total cost is PKR 132,000."
+    * If the user asks "tell me the pricing if stay 4 nights", you MUST calculate: 4 nights × per night rate = total cost. DO NOT just show per night rates.
+    * **CRITICAL:** When number of nights is mentioned, ALWAYS perform the multiplication and show the total. Never just show per night rates without calculating the total.
   - **DATE-BASED PRICING:** When dates are provided (e.g., "from 2 to 6 Feb"), identify which days are weekdays (Monday-Friday) and which are weekends (Saturday-Sunday), then apply the appropriate rates for each night and calculate the total. Always show the calculation breakdown.
 - **AVAILABILITY QUERIES:** If the question asks about availability (e.g., "is it available", "can I book", "available tomorrow", "is it available if stay tomorrow"), and the context states that cottages are "available year-round" or "available throughout the year", you MUST answer "Yes, Swiss Cottages are available throughout the year, subject to availability." Do NOT say "No" or "not available" unless the context explicitly states unavailability for specific dates. If the context says "available throughout the year" or "available year-round", the answer is always "Yes" with that qualification.
 - **MULTIPLE Q&A IN CONTEXT:** If the context contains multiple question-answer pairs, you MUST find and use the answer that matches the user's question topic. For example, if the user asks about "pets" but the context has both a pet question and a heating question, you MUST use the pet-related answer, NOT the heating answer. Match the question topic, not just any answer in the context.
@@ -114,6 +118,13 @@ CRITICAL: If the follow-up adds a constraint or modifier (e.g., "just weekdays",
 Example: Previous Q: "pricing for 5 days" + Follow-up: "just weekdays" → Standalone: "pricing for 5 days on weekdays only"
 Example: Previous Q: "cottage capacity" + Follow-up: "for 3 people" → Standalone: "cottage capacity for 3 people"
 
+CRITICAL CONTEXT MAINTENANCE: If the user asks a follow-up question like "and what on weekends?" or "what about weekdays?" or "and what about...", you MUST include the cottage number or topic from the previous conversation context.
+- If the chat history mentions "Cottage 7", "Cottage 9", or "Cottage 11", include it in the standalone question
+- Example: Previous Q: "Cottage 9 pricing" + Follow-up: "and what on weekends?" → Standalone: "Cottage 9 weekend pricing"
+- Example: Previous Q: "Cottage 9 pricing" + Follow-up: "what about weekdays?" → Standalone: "Cottage 9 weekday pricing"
+- If the follow-up is about pricing/rates and a cottage was mentioned before, include that cottage in the standalone question
+- Extract cottage numbers (7, 9, 11) from chat history if the follow-up question is ambiguous
+
 Standalone question:
 """
 
@@ -145,11 +156,21 @@ CRITICAL RULES:
    - "tell me about the availability" → "cottage availability available dates booking vacancies year-round"
    - "tell me about cottage X" → "cottage X properties features amenities accommodation details"
    - "tell me the pricing" → "cottage pricing rates per night weekday weekend PKR cost"
+   - "if stay X nights" → "pricing total cost X nights calculation weekday weekend rates"
+   - "stay X nights" → "pricing total cost X nights calculation weekday weekend rates"
+   - "X nights" → "pricing total cost X nights calculation weekday weekend rates"
+   - "one day" → "pricing per night one night rate weekday weekend"
+   - "one day pricing" → "pricing per night one night rate weekday weekend"
+   - "price for one day" → "pricing per night one night rate weekday weekend"
    - "how can I book" → "booking process reservation how to book contact Airbnb website"
    - "advance payment" → "advance payment partial payment booking confirmation required"
    - "is advance payment required" → "advance payment required booking confirmation partial payment"
    - "are pets allowed" → "pets allowed pet-friendly permission approval"
    - "pet" → "pets pet-friendly allowed permission"
+   - "is it safe" → "safety security secure gated community security guards guest safety"
+   - "safe for us" → "safety security secure gated community security guards guest safety"
+   - "is it safe for" → "safety security secure gated community security guards guest safety"
+   - "safety" → "safety security secure gated community security guards"
 4. For availability queries, emphasize availability-related terms
    - "available" → "availability available dates booking vacancies year-round"
    - "which cottages" → "cottage availability available cottages booking options"

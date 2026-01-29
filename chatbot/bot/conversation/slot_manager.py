@@ -58,6 +58,14 @@ SLOT_DEFINITIONS = {
         "validation": lambda x: x in ["weekday", "weekend", "peak", "off-peak"] if x else True,
         "default": None,
     },
+    "nights": {
+        "type": "integer",
+        "required_for": ["pricing", "booking"],
+        "priority": 4,
+        "extraction_keywords": ["nights", "nights stay", "stay", "days"],
+        "validation": lambda x: isinstance(x, int) and x > 0 if x else True,
+        "default": None,
+    },
     "budget": {
         "type": "optional",
         "required_for": [],
@@ -200,6 +208,29 @@ class SlotManager:
             
             if "season" in extracted:
                 logger.debug(f"Extracted season slot: {extracted['season']}")
+        
+        # Extract number of nights
+        if "nights" not in self.slots or self.slots["nights"] is None:
+            nights_patterns = [
+                r"if\s+stay\s+(\d+)\s+nights?",
+                r"stay\s+(\d+)\s+nights?",
+                r"(\d+)\s+nights?\s+stay",
+                r"(\d+)\s+nights?",
+                r"for\s+(\d+)\s+nights?",
+                r"(\d+)\s+days?\s+stay",
+                r"stay\s+(\d+)\s+days?",
+            ]
+            for pattern in nights_patterns:
+                match = re.search(pattern, query_lower)
+                if match:
+                    try:
+                        nights = int(match.group(1))
+                        if nights > 0:
+                            extracted["nights"] = nights
+                            logger.debug(f"Extracted nights slot: {nights}")
+                            break
+                    except (ValueError, IndexError):
+                        continue
         
         # Use LLM for complex extraction if available
         if self.llm and (not extracted or len(extracted) < 2):
