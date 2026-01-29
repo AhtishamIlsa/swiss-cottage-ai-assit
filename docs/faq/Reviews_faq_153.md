@@ -1,9 +1,12 @@
 ---
-category: "Reviews"
-faq_id: "faq_153"
-source: "Google Sheets"
-question: "Do reviews mention the caretaker or guest support?"
-type: "qa_pair"
+category: Reviews
+faq_id: faq_153
+intent: faq_question
+optional_slots: []
+question: Do reviews mention the caretaker or guest support?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Reviews

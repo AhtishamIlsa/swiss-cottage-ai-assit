@@ -23,21 +23,59 @@ class Chroma:
         collection_metadata: dict | None = None,
         is_persistent: bool = True,
     ) -> None:
-        client_settings = chromadb.config.Settings(is_persistent=is_persistent)
-        client_settings.persist_directory = persist_directory
-
         if client is not None:
             self.client = client
         else:
-            self.client = chromadb.Client(client_settings)
+            if persist_directory:
+                # Use PersistentClient for persistent storage
+                self.client = chromadb.PersistentClient(path=persist_directory)
+            else:
+                # Use regular Client for in-memory storage
+                client_settings = chromadb.config.Settings(is_persistent=is_persistent)
+                self.client = chromadb.Client(client_settings)
 
         self.embedding = embedding
 
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            embedding_function=None,
-            metadata=collection_metadata,
-        )
+        # Try to get existing collection first, create if it doesn't exist
+        # Handle ChromaDB schema errors (e.g., missing 'topic' column)
+        try:
+            # First try to list collections to see if it exists (this might avoid schema issues)
+            existing_collections = [c.name for c in self.client.list_collections()]
+            if collection_name in existing_collections:
+                # Collection exists, try to get it
+                try:
+                    self.collection = self.client.get_collection(name=collection_name)
+                except Exception as get_err:
+                    error_msg = str(get_err).lower()
+                    # If schema error, we'll need to recreate - but can't delete due to same error
+                    if "no such column" in error_msg or "topic" in error_msg:
+                        logger.error(f"ChromaDB schema error when getting collection: {get_err}")
+                        logger.error("Cannot fix automatically - please delete vector_store directory and rebuild")
+                        raise
+                    raise
+            else:
+                # Collection doesn't exist, create it
+                self.collection = self.client.create_collection(
+                    name=collection_name,
+                    embedding_function=None,
+                    metadata=collection_metadata,
+                )
+        except Exception as e:
+            error_msg = str(e).lower()
+            # If it's a schema error when listing, the database is corrupted
+            if "no such column" in error_msg or "topic" in error_msg:
+                logger.error(f"ChromaDB schema error detected: {e}")
+                logger.error("The vector store database has a schema mismatch. Please delete the vector_store directory and rebuild.")
+                raise RuntimeError(
+                    f"ChromaDB schema error: {e}. Please delete vector_store directory and rebuild: "
+                    "rm -rf vector_store && python3 chatbot/memory_builder.py --chunk-size 512 --chunk-overlap 25"
+                )
+            # Other error, try to create collection
+            self.collection = self.client.create_collection(
+                name=collection_name,
+                embedding_function=None,
+                metadata=collection_metadata,
+            )
 
     @property
     def embeddings(self) -> Embedder | None:
@@ -193,7 +231,7 @@ class Chroma:
         Args:
             chunks (list): List of Document objects to add to the collection.
         """
-        texts = [clean(doc.page_content, no_emoji=True) for doc in chunks]
+        texts = [clean(doc.page_content, normalize_whitespace=True, no_line_breaks=False) for doc in chunks]
         metadatas = [doc.metadata for doc in chunks]
         self.from_texts(
             texts=texts,

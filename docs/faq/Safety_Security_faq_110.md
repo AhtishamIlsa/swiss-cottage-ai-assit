@@ -1,9 +1,12 @@
 ---
-category: "Safety & Security"
-faq_id: "faq_110"
-source: "Google Sheets"
-question: "Is the cottage located in a gated or secure community?"
-type: "qa_pair"
+category: Safety & Security
+faq_id: faq_110
+intent: safety
+optional_slots: []
+question: Is the cottage located in a gated or secure community?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Safety & Security

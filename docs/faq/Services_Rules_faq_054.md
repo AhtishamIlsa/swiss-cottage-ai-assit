@@ -1,9 +1,12 @@
 ---
-category: "Services & Rules"
-faq_id: "faq_054"
-source: "Google Sheets"
-question: "Do you provide cooking or chef services?"
-type: "qa_pair"
+category: Services & Rules
+faq_id: faq_054
+intent: faq_question
+optional_slots: []
+question: Do you provide cooking or chef services?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Services & Rules

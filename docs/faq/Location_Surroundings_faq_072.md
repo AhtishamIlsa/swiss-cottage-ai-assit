@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_072"
-source: "Google Sheets"
-question: "Is Swiss Cottages good for weekend getaways?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_072
+intent: location
+optional_slots: []
+question: Is Swiss Cottages good for weekend getaways?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

@@ -82,14 +82,17 @@ class DirectoryLoader:
         if doc_path.is_file():
             try:
                 logger.debug(f"Processing file: {str(doc_path)}")
-                # Loads document from the specified path.
-                # The unstructured `partition` function and will automatically detect the file type with libmagic to
-                # determine the file's type and route it to the appropriate partitioning function.
-                elements = partition(filename=str(doc_path), **self.partition_kwargs)
-                # Note: The `partition` function returns a list of elements that we can filter by type based on the
-                # specific format.
-                text = "\n\n".join([str(el) for el in elements])
-                docs.extend([Document(page_content=text, metadata={"source": str(doc_path)})])
+                # For markdown files, read directly to avoid unstructured issues
+                if doc_path.suffix.lower() == '.md':
+                    text = doc_path.read_text(encoding='utf-8')
+                    docs.extend([Document(page_content=text, metadata={"source": str(doc_path)})])
+                else:
+                    # For other file types, use unstructured
+                    elements = partition(filename=str(doc_path), **self.partition_kwargs)
+                    text = "\n\n".join([str(el) for el in elements])
+                    docs.extend([Document(page_content=text, metadata={"source": str(doc_path)})])
+            except Exception as e:
+                logger.warning(f"Failed to process file {doc_path}: {e}. Skipping...")
             finally:
                 if pbar:
                     pbar.update(1)

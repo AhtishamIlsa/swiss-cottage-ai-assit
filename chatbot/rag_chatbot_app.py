@@ -1,16 +1,22 @@
 import argparse
 import sys
 import time
+import re
 from pathlib import Path
 import glob
 import os
 
 import streamlit as st
 from bot.client.groq_client import GroqClient
-from bot.client.lama_cpp_client import LamaCppClient
 from bot.conversation.chat_history import ChatHistory
+from typing import TYPE_CHECKING, Union, Any
+
+if TYPE_CHECKING:
+    from bot.client.lama_cpp_client import LamaCppClient
 from bot.conversation.conversation_handler import answer_with_context, extract_content_after_reasoning, refine_question
 from bot.conversation.intent_router import IntentRouter, IntentType
+from bot.conversation.capacity_handler import get_capacity_handler
+from bot.conversation.refinement_handler import get_refinement_handler
 from bot.conversation.ctx_strategy import (
     BaseSynthesisStrategy,
     get_ctx_synthesis_strategies,
@@ -149,7 +155,7 @@ def display_cottage_images(cottage_numbers: list[str], root_folder: Path):
 
 
 @st.cache_resource()
-def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2") -> LamaCppClient | GroqClient:
+def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2") -> Union["LamaCppClient", GroqClient, Any]:
     """
     Load LLM client - either Groq API (fast) or local model (slower but offline).
     
@@ -174,10 +180,20 @@ def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, 
             use_groq = False
     
     if not use_groq:
-        model_settings = get_model_settings(model_name)
-        llm = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
-        logger.info("✅ Using local model (llama.cpp)")
-        return llm
+        # Lazy import to avoid requiring llama_cpp module
+        try:
+            from bot.client.lama_cpp_client import LamaCppClient
+            model_settings = get_model_settings(model_name)
+            llm = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
+            logger.info("✅ Using local model (llama.cpp)")
+            return llm
+        except ImportError:
+            logger.error("llama_cpp module not installed. Cannot use local model. Please install it or use Groq API.")
+            raise RuntimeError(
+                "❌ Local model requires 'llama_cpp' module.\n\n"
+                "💡 **Solution:** Use Groq API instead (faster and no installation needed):\n"
+                "   Set 'use_groq=True' in the sidebar or ensure GROQ_API_KEY is set in .env"
+            )
 
 
 @st.cache_resource()
@@ -187,7 +203,7 @@ def init_chat_history(total_length: int = 2) -> ChatHistory:
 
 
 @st.cache_resource()
-def load_ctx_synthesis_strategy(ctx_synthesis_strategy_name: str, _llm: LamaCppClient) -> BaseSynthesisStrategy:
+def load_ctx_synthesis_strategy(ctx_synthesis_strategy_name: str, _llm: Union["LamaCppClient", GroqClient, Any]) -> BaseSynthesisStrategy:
     ctx_synthesis_strategy = get_ctx_synthesis_strategy(ctx_synthesis_strategy_name, llm=_llm)
     return ctx_synthesis_strategy
 
@@ -454,8 +470,27 @@ def main(parameters) -> None:
                 message_placeholder.markdown(full_response)
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # FAQ_QUESTION → RAG RETRIEVAL AND ANSWER
-            else:  # IntentType.FAQ_QUESTION or IntentType.UNKNOWN
+            # REFINEMENT → Combine with previous question and proceed with RAG
+            elif intent == IntentType.REFINEMENT:
+                # Handle refinement request - combine previous question with constraint
+                logger.info(f"Processing refinement request: {user_input}")
+                refinement_handler = get_refinement_handler(llm)
+                refinement_result = refinement_handler.process_refinement(
+                    user_input, chat_history, llm
+                )
+                
+                # Use combined question for RAG instead of original query
+                combined_question = refinement_result["combined_question"]
+                logger.info(f"Refined question: '{user_input}' → '{combined_question}'")
+                
+                # Replace original user_input with combined question for RAG processing
+                original_user_input = user_input
+                user_input = combined_question  # Use combined question for RAG
+                
+                # Proceed with RAG using combined question (fall through to else block)
+            
+            # FAQ_QUESTION, UNKNOWN, or REFINEMENT (after processing) → RAG RETRIEVAL AND ANSWER
+            if intent in [IntentType.FAQ_QUESTION, IntentType.UNKNOWN, IntentType.REFINEMENT]:
                 # Check if user is asking for images
                 is_image_request, cottage_numbers = detect_image_request(user_input)
                 
@@ -493,6 +528,26 @@ def main(parameters) -> None:
                     logger.info(f"Original query: {user_input}")
                     logger.info(f"Refined query: {refined_user_input}")
                     
+                    # Query optimization for better RAG retrieval
+                    import os
+                    from bot.conversation.query_optimizer import optimize_query_for_rag
+                    
+                    if os.getenv("ENABLE_QUERY_OPTIMIZATION", "true").lower() == "true":
+                        try:
+                            optimized_query = optimize_query_for_rag(
+                                llm,
+                                refined_user_input,
+                                max_new_tokens=max_new_tokens
+                            )
+                            logger.info(f"Query optimization: '{refined_user_input}' → '{optimized_query}'")
+                            search_query = optimized_query
+                        except Exception as e:
+                            logger.warning(f"Query optimization failed: {e}, using refined query")
+                            search_query = refined_user_input
+                    else:
+                        search_query = refined_user_input
+                        logger.debug("Query optimization disabled, using refined query")
+                    
                     # Try retrieval with both original and refined queries to maximize chances
                     retrieved_contents = []
                     sources = []
@@ -509,25 +564,25 @@ def main(parameters) -> None:
                         effective_k = max(parameters.k, 5)  # Get at least 5 documents for cottage-specific queries
                         logger.info(f"Increased k to {effective_k} for cottage-specific query")
                     
-                    # First try with refined query
+                    # First try with optimized/refined query
                     try:
                         retrieved_contents, sources = index.similarity_search_with_threshold(
-                            query=refined_user_input, k=effective_k, threshold=0.0
+                            query=search_query, k=effective_k, threshold=0.0
                         )
-                        logger.info(f"Retrieved {len(retrieved_contents)} documents with refined query")
+                        logger.info(f"Retrieved {len(retrieved_contents)} documents with search query")
                     except Exception as e:
-                        logger.warning(f"Error with threshold search (refined): {e}, trying without threshold")
+                        logger.warning(f"Error with threshold search (optimized): {e}, trying without threshold")
                         try:
-                            retrieved_contents = index.similarity_search(query=refined_user_input, k=effective_k)
+                            retrieved_contents = index.similarity_search(query=search_query, k=effective_k)
                             sources = [{"score": "N/A", "document": doc.metadata.get("source", "unknown"), 
                                        "content_preview": f"{doc.page_content[0:256]}..."} for doc in retrieved_contents]
-                            logger.info(f"Retrieved {len(retrieved_contents)} documents without threshold (refined)")
+                            logger.info(f"Retrieved {len(retrieved_contents)} documents without threshold (optimized)")
                         except Exception as e2:
-                            logger.error(f"Error with similarity search (refined): {e2}")
+                            logger.error(f"Error with similarity search (optimized): {e2}")
                     
-                    # If no results with refined query, try original query
+                    # If no results with optimized query, try original query
                     if not retrieved_contents or len(retrieved_contents) == 0:
-                        logger.info("No results with refined query, trying original query")
+                        logger.info("No results with optimized query, trying original query")
                         try:
                             retrieved_contents, sources = index.similarity_search_with_threshold(
                                 query=user_input, k=effective_k, threshold=0.0
@@ -635,6 +690,21 @@ def main(parameters) -> None:
                         retrieved_contents = prioritize_cottage_documents(user_input, retrieved_contents)
                         logger.info(f"Re-ordered {len(retrieved_contents)} documents to prioritize cottage-specific matches")
                     
+                    # Check if this is a capacity query and process it
+                    capacity_handler = get_capacity_handler()
+                    if capacity_handler.is_capacity_query(user_input):
+                        logger.info("Detected capacity query, processing with structured logic")
+                        capacity_result = capacity_handler.process_capacity_query(
+                            user_input, retrieved_contents
+                        )
+                        
+                        # Enhance context with capacity analysis if we have structured info
+                        if capacity_result.get("has_all_info") and capacity_result.get("answer_template"):
+                            retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                                retrieved_contents, capacity_result
+                            )
+                            logger.info(f"Enhanced context with capacity analysis: {capacity_result.get('suitable')}")
+                    
                     # Generate answer from retrieved documents
                     if retrieved_contents and len(retrieved_contents) > 0:
                         # Check relevance before generating answer
@@ -671,13 +741,65 @@ def main(parameters) -> None:
                                     )
                                     answer_text = ""
                                     token_count = 0
+                                    timeout_count = 0
                                     for token in streamer:
                                         parsed_token = llm.parse_token(token)
                                         answer_text += parsed_token
                                         token_count += 1
+                                        timeout_count = 0  # Reset timeout counter on successful token
                                         # Update UI every 3 tokens to show progress (but not too frequently)
                                         if token_count % 3 == 0:
                                             message_placeholder.markdown(sources_preview + "\n\n**Answer:**\n\n" + answer_text + "▌")
+                                    
+                                    # Clean answer text to remove LLM reasoning/process text
+                                    def clean_answer_text(answer: str) -> str:
+                                        """Remove LLM reasoning and process text from answer."""
+                                        if not answer:
+                                            return answer
+                                        reasoning_patterns = [
+                                            r"However, there seems to be missing context.*?\.\s*",
+                                            r"Since the original context is now provided.*?\.\s*",
+                                            r"The new context is as follows:.*?---\s*",
+                                            r"Since the question and the answer already match.*?\.\s*",
+                                            r"Therefore, I'll leave the answer as it is\.\s*",
+                                            r"Refined Answer:\s*",
+                                            r"Refined answer:\s*",
+                                            r"Answer:\s*",
+                                            r"Based on the provided context.*?\.\s*",
+                                            r"Given the context.*?\.\s*",
+                                            r"Based on the existing answer and the new context.*?\.\s*",
+                                            r"We have the opportunity to refine.*?\.\s*",
+                                            r"To refine the existing answer.*?\.\s*",
+                                            r"Considering.*?the refined answer.*?\.\s*",
+                                        ]
+                                        cleaned = answer
+                                        for pattern in reasoning_patterns:
+                                            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+                                        cleaned = re.sub(r"```.*?```", "", cleaned, flags=re.DOTALL)
+                                        lines = cleaned.split('\n')
+                                        filtered_lines = []
+                                        skip_next = False
+                                        for line in lines:
+                                            line_lower = line.lower().strip()
+                                            if any(phrase in line_lower for phrase in [
+                                                "the new context is",
+                                                "since the original",
+                                                "however, there seems",
+                                                "to refine the existing",
+                                                "we have the opportunity",
+                                                "considering the",
+                                            ]):
+                                                skip_next = True
+                                                continue
+                                            if skip_next and (line.strip() == "---" or line.strip() == ""):
+                                                continue
+                                            skip_next = False
+                                            filtered_lines.append(line)
+                                        cleaned = '\n'.join(filtered_lines)
+                                        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+                                        return cleaned.strip()
+                                    
+                                    answer_text = clean_answer_text(answer_text)
                                     
                                     # Final update - handle booking requests specially
                                     if is_booking_request:
@@ -708,10 +830,24 @@ def main(parameters) -> None:
                                     chat_history.append(f"question: {refined_user_input}, answer: {answer_text}")
                                 except Exception as e:
                                     logger.error(f"Error generating answer: {e}", exc_info=True)
+                                    error_msg = str(e).lower()
                                     full_response = sources_preview + "\n\n**Error:** Could not generate answer from retrieved documents.\n\n"
-                                    full_response += f"**Details:** {str(e)}\n\n"
-                                    full_response += "💡 **Tip:** Try using a faster strategy: `create-and-refine` instead of `async-tree-summarization`"
+                                    
+                                    # Check for rate limit errors
+                                    if "429" in error_msg or "rate limit" in error_msg or "rate_limit" in error_msg:
+                                        full_response += "⚠️ **Rate Limit Error:** The Groq API is currently rate-limited.\n\n"
+                                        full_response += "**What you can do:**\n"
+                                        full_response += "- Wait 5-10 seconds and try again\n"
+                                        full_response += "- Try a simpler/shorter question\n"
+                                        full_response += "- Check your Groq API quota at https://console.groq.com\n"
+                                        full_response += "- Consider upgrading to a higher tier for more tokens per minute\n\n"
+                                        full_response += f"**Error details:** {str(e)[:200]}"
+                                    else:
+                                        full_response += f"**Details:** {str(e)}\n\n"
+                                        full_response += "💡 **Tip:** Try using a faster strategy: `create-and-refine` instead of `async-tree-summarization`"
+                                    
                                     message_placeholder.markdown(full_response)
+                                    st.error("❌ Error generating response. See message above for details.")
 
                             st.session_state.messages.append({"role": "assistant", "content": full_response})
                     elif not retrieved_contents or len(retrieved_contents) == 0:

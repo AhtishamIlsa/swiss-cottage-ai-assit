@@ -23,7 +23,18 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Check if required packages are installed
+# Check if Poetry is available and use it if possible
+if command -v poetry &> /dev/null; then
+    # Check if required packages are installed in Poetry environment
+    if ! poetry run python3 -c "import fastapi" 2>/dev/null; then
+        echo "⚠️  FastAPI is not installed in Poetry environment"
+        echo "💡 Please install dependencies first:"
+        echo "   poetry install"
+        exit 1
+    fi
+    PYTHON_CMD="poetry run python3"
+else
+    # Fallback to system Python
 if ! python3 -c "import fastapi" 2>/dev/null; then
     echo "⚠️  FastAPI is not installed"
     echo "💡 Please install dependencies first:"
@@ -31,6 +42,8 @@ if ! python3 -c "import fastapi" 2>/dev/null; then
     echo "   or"
     echo "   pip install fastapi uvicorn pydantic"
     exit 1
+    fi
+    PYTHON_CMD="python3"
 fi
 
 # Set defaults
@@ -48,7 +61,7 @@ echo "   Press Ctrl+C to stop"
 echo ""
 
 # Run FastAPI with uvicorn
-python3 -m uvicorn chatbot.api.main:app \
+$PYTHON_CMD -m uvicorn chatbot.api.main:app \
     --host "$API_HOST" \
     --port "$API_PORT" \
     --reload

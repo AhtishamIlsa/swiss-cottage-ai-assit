@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_068"
-source: "Google Sheets"
-question: "Are there restaurants nearby?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_068
+intent: location
+optional_slots: []
+question: Are there restaurants nearby?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

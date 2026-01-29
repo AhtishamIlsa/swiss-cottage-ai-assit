@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_074"
-source: "Google Sheets"
-question: "What activities can guests enjoy nearby?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_074
+intent: location
+optional_slots: []
+question: What activities can guests enjoy nearby?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

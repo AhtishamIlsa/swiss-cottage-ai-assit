@@ -1,20 +1,23 @@
 import asyncio
 import re
 from asyncio import get_event_loop
-from typing import Any
+from typing import Any, TYPE_CHECKING, Union
 
 import streamlit as st
 from entities.document import Document
 from helpers.log import get_logger
 
-from bot.client.lama_cpp_client import LamaCppClient
 from bot.conversation.chat_history import ChatHistory
 from bot.conversation.ctx_strategy import AsyncTreeSummarizationStrategy, BaseSynthesisStrategy
+
+if TYPE_CHECKING:
+    from bot.client.lama_cpp_client import LamaCppClient
+    from bot.client.groq_client import GroqClient
 
 logger = get_logger(__name__)
 
 
-def refine_question(llm: LamaCppClient, question: str, chat_history: ChatHistory, max_new_tokens: int = 128) -> str:
+def refine_question(llm: Union["LamaCppClient", "GroqClient", Any], question: str, chat_history: ChatHistory, max_new_tokens: int = 128) -> str:
     """
     Refines the given question based on the chat history.
 
@@ -53,7 +56,7 @@ def refine_question(llm: LamaCppClient, question: str, chat_history: ChatHistory
         return question
 
 
-def answer(llm: LamaCppClient, question: str, chat_history: ChatHistory, max_new_tokens: int = 512) -> Any:
+def answer(llm: Union["LamaCppClient", "GroqClient", Any], question: str, chat_history: ChatHistory, max_new_tokens: int = 512) -> Any:
     """
     Generates an answer to the given question based on the chat history or a direct prompt.
 
@@ -96,7 +99,7 @@ def answer(llm: LamaCppClient, question: str, chat_history: ChatHistory, max_new
 
 
 def answer_with_context(
-    llm: LamaCppClient,
+    llm: Union["LamaCppClient", "GroqClient", Any],
     ctx_synthesis_strategy: BaseSynthesisStrategy,
     question: str,
     chat_history: ChatHistory,
@@ -227,7 +230,7 @@ def extract_content_after_reasoning(text: str, reasoning_stop_tag: str) -> str:
 
 # TODO: Use it later
 def stream_response_with_reasoning(
-    llm: LamaCppClient, user_input: str, chat_history: ChatHistory, max_new_tokens: int
+    llm: Union["LamaCppClient", "GroqClient", Any], user_input: str, chat_history: ChatHistory, max_new_tokens: int
 ) -> tuple[str, str]:
     """
     Streams a response from the language model (LLM) to the user input, including reasoning, and

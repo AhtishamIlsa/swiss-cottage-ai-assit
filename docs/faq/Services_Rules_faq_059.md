@@ -1,9 +1,12 @@
 ---
-category: "Services & Rules"
-faq_id: "faq_059"
-source: "Google Sheets"
-question: "Are functions or parties allowed?"
-type: "qa_pair"
+category: Services & Rules
+faq_id: faq_059
+intent: faq_question
+optional_slots: []
+question: Are functions or parties allowed?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Services & Rules

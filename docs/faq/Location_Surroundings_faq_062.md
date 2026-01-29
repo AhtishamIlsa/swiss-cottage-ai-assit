@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_062"
-source: "Google Sheets"
-question: "Where are Swiss Cottages located?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_062
+intent: location
+optional_slots: []
+question: Where are Swiss Cottages located?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

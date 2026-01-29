@@ -15,10 +15,15 @@ Design principles:
 """
 
 from enum import Enum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING, Union, Any
+
 from helpers.log import get_logger
-from bot.client.lama_cpp_client import LamaCppClient
 from bot.conversation.chat_history import ChatHistory
+from bot.conversation.refinement_detector import get_refinement_detector
+
+if TYPE_CHECKING:
+    from bot.client.lama_cpp_client import LamaCppClient
+    from bot.client.groq_client import GroqClient
 
 logger = get_logger(__name__)
 
@@ -32,7 +37,16 @@ class IntentType(Enum):
     AFFIRMATIVE = "affirmative"
     NEGATIVE = "negative"
     CLARIFICATION_NEEDED = "clarification_needed"
+    REFINEMENT = "refinement"  # Refinement/constraint request
     UNKNOWN = "unknown"
+    # Manager-style intents
+    PRICING = "pricing"  # Pricing queries
+    ROOMS = "rooms"  # Room/cottage queries
+    SAFETY = "safety"  # Safety/security queries
+    BOOKING = "booking"  # Booking intent (different from booking request)
+    AVAILABILITY = "availability"  # Availability queries
+    FACILITIES = "facilities"  # Facilities/amenities queries
+    LOCATION = "location"  # Location queries
 
 
 class IntentRouter:
@@ -45,7 +59,7 @@ class IntentRouter:
     3. Route to appropriate handler
     """
     
-    def __init__(self, llm: Optional[LamaCppClient] = None, use_llm_fallback: bool = True):
+    def __init__(self, llm: Optional[Union["LamaCppClient", "GroqClient", Any]] = None, use_llm_fallback: bool = True):
         """
         Initialize the intent router.
         
@@ -117,7 +131,7 @@ class IntentRouter:
         words = query_lower.split()
         
         # Fast path: Pattern matching
-        intent = self._pattern_match(query_lower, words, original_query=query)
+        intent = self._pattern_match(query_lower, words, original_query=query, chat_history=chat_history)
         if intent:
             return intent
         
@@ -137,7 +151,7 @@ class IntentRouter:
         logger.debug(f"Default classification for '{query}': FAQ_QUESTION")
         return IntentType.FAQ_QUESTION
     
-    def _pattern_match(self, query_lower: str, words: list, original_query: str = None) -> Optional[IntentType]:
+    def _pattern_match(self, query_lower: str, words: list, original_query: str = None, chat_history: Optional[ChatHistory] = None) -> Optional[IntentType]:
         """
         Fast pattern matching for intent detection.
         
@@ -275,9 +289,56 @@ class IntentRouter:
             statement_indicators = ["thanks", "thank", "appreciate", "great", "good", "nice"]
             is_just_thanks = any(indicator in query_lower for indicator in statement_indicators) and len(words) <= 4
             
-            # If it's not just a thank you statement, treat as FAQ question
+            # If it's not just a thank you statement, classify by specific intent
             if not is_just_thanks:
+                # Classify by specific intent type based on keywords
+                # Pricing intent
+                pricing_keywords = ["price", "pricing", "cost", "rate", "rates", "payment", "pay", "advance", "fee", "charges"]
+                if any(keyword in query_lower for keyword in pricing_keywords):
+                    return IntentType.PRICING
+                
+                # Booking intent (asking about booking process, not requesting to book)
+                booking_keywords = ["book", "booking", "reserve", "reservation", "confirm", "confirmation"]
+                if any(keyword in query_lower for keyword in booking_keywords):
+                    return IntentType.BOOKING
+                
+                # Availability intent
+                availability_keywords = ["available", "availability", "free", "vacant", "open"]
+                if any(keyword in query_lower for keyword in availability_keywords):
+                    return IntentType.AVAILABILITY
+                
+                # Rooms/Properties intent
+                rooms_keywords = ["cottage", "room", "bedroom", "property", "accommodation", "space"]
+                if any(keyword in query_lower for keyword in rooms_keywords):
+                    return IntentType.ROOMS
+                
+                # Facilities intent
+                facilities_keywords = ["facility", "facilities", "amenity", "amenities", "feature", "features", "kitchen", "terrace", "balcony"]
+                if any(keyword in query_lower for keyword in facilities_keywords):
+                    return IntentType.FACILITIES
+                
+                # Location intent
+                location_keywords = ["location", "address", "where", "nearby", "surrounding", "area", "place"]
+                if any(keyword in query_lower for keyword in location_keywords):
+                    return IntentType.LOCATION
+                
+                # Safety intent
+                safety_keywords = ["safety", "security", "safe", "secure", "emergency", "first aid", "medical"]
+                if any(keyword in query_lower for keyword in safety_keywords):
+                    return IntentType.SAFETY
+                
+                # Default to FAQ_QUESTION if topic keyword found but no specific intent matched
                 return None  # Let it fall through to FAQ_QUESTION
+        
+        # CRITICAL: Check for refinement requests BEFORE statement check
+        # Refinement requests are short constraint phrases that modify previous questions
+        if chat_history and len(chat_history) > 0:
+            refinement_detector = get_refinement_detector()
+            # Use original_query if available, otherwise use query_lower
+            query_for_refinement = original_query if original_query else query_lower
+            if refinement_detector.is_refinement_request(query_for_refinement, chat_history):
+                logger.info(f"Classified as REFINEMENT: {query_for_refinement}")
+                return IntentType.REFINEMENT
         
         # Check for statements (short queries)
         if len(words) <= 5:
@@ -501,40 +562,50 @@ class IntentRouter:
         prompt = f"""You are an intent classifier. Classify the user query into ONE of these categories:
 - greeting: Simple greetings like "hi", "hello", "hey"
 - help: Asking what the bot can do, like "how can you help", "what can you do"
-- question: Asking FOR information about a topic (booking, pricing, facilities, location, etc.)
+- pricing: Questions about prices, rates, costs, payments
+- booking: Questions about booking process, reservations
+- availability: Questions about availability, dates, vacancies
+- rooms: Questions about cottages, rooms, properties, accommodation
+- facilities: Questions about amenities, features, what's available
+- location: Questions about location, address, nearby places
+- safety: Questions about safety, security, emergencies
+- question: Other questions asking FOR information
 - statement: Acknowledgments like "thanks", "thank you", "ok", "got it", "understood"
 
 CRITICAL RULES:
-1. If the query asks FOR information (about booking, pricing, facilities, location, etc.), it's a QUESTION
-2. If the query asks HOW/WHAT the bot can help, it's HELP
-3. If the query is just a greeting, it's GREETING
-4. If the query is acknowledging/thankful, it's STATEMENT
-5. When in doubt, classify as QUESTION (safer default - better to retrieve than to miss)
+1. If the query asks about prices/rates/costs/payments, it's PRICING
+2. If the query asks about booking/reservation process, it's BOOKING
+3. If the query asks about availability/dates/vacancies, it's AVAILABILITY
+4. If the query asks about cottages/rooms/properties, it's ROOMS
+5. If the query asks about amenities/facilities/features, it's FACILITIES
+6. If the query asks about location/address/nearby, it's LOCATION
+7. If the query asks about safety/security/emergencies, it's SAFETY
+8. If the query asks HOW/WHAT the bot can help, it's HELP
+9. If the query is just a greeting, it's GREETING
+10. If the query is acknowledging/thankful, it's STATEMENT
+11. When in doubt, classify as QUESTION (safer default - better to retrieve than to miss)
 
 Examples:
 - "hi" → greeting  
 - "hello" → greeting
-- "hey there" → greeting
 - "how can you help" → help
-- "what can you do" → help
-- "how to book" → question
-- "how can i book" → question
-- "what is the price" → question
-- "book a cottage" → question
-- "tell me about facilities" → question
-- "where is the location" → question
+- "what is the price" → pricing
+- "how much does it cost" → pricing
+- "how to book" → booking
+- "is cottage 7 available" → availability
+- "tell me about cottage 9" → rooms
+- "what facilities are available" → facilities
+- "where is the location" → location
+- "is it safe" → safety
 - "thanks" → statement
-- "thank you" → statement
 - "ok" → statement
-- "got it" → statement
-- "understood" → statement
 
 User query: "{query}"
 
 Previous conversation:
 {str(chat_history) if chat_history else "None"}
 
-Respond with ONLY the category name (greeting, help, question, or statement):"""
+Respond with ONLY the category name:"""
         
         try:
             # Increase tokens for more reliable classification (5 was too short)
@@ -544,25 +615,37 @@ Respond with ONLY the category name (greeting, help, question, or statement):"""
             logger.debug(f"LLM classification for '{query}': '{classification}'")
             
             # More robust parsing with priority order
-            # Check for statement first (most specific), then help, then greeting, default to question
-            if any(word in classification for word in ["statement", "thanks", "thank", "ok", "okay", "got it", "understood"]):
-                # Only return statement if we're confident (contains explicit statement words)
-                if "statement" in classification or classification in ["thanks", "thank", "ok", "okay"]:
+            # Map LLM classification to IntentType
+            classification_lower = classification.lower().strip()
+            
+            # Check for specific intents first
+            if "pricing" in classification_lower:
+                return IntentType.PRICING
+            elif "booking" in classification_lower:
+                return IntentType.BOOKING
+            elif "availability" in classification_lower:
+                return IntentType.AVAILABILITY
+            elif "room" in classification_lower or "cottage" in classification_lower:
+                return IntentType.ROOMS
+            elif "facilit" in classification_lower or "amenit" in classification_lower:
+                return IntentType.FACILITIES
+            elif "location" in classification_lower or "address" in classification_lower:
+                return IntentType.LOCATION
+            elif "safety" in classification_lower or "security" in classification_lower:
+                return IntentType.SAFETY
+            elif any(word in classification_lower for word in ["statement", "thanks", "thank", "ok", "okay", "got it", "understood"]):
+                if "statement" in classification_lower or classification_lower in ["thanks", "thank", "ok", "okay"]:
                     logger.debug(f"Classified as STATEMENT: {query}")
-                return IntentType.STATEMENT
-                # If it's ambiguous (e.g., "ok" could be acknowledgment or agreement), default to question
+                    return IntentType.STATEMENT
+                # If ambiguous, default to question
                 logger.debug(f"Ambiguous classification '{classification}' for '{query}', defaulting to QUESTION")
                 return IntentType.FAQ_QUESTION
-            
-            elif "greeting" in classification or classification.startswith("greet"):
+            elif "greeting" in classification_lower or classification_lower.startswith("greet"):
                 logger.debug(f"Classified as GREETING: {query}")
                 return IntentType.GREETING
-            
-            elif "help" in classification and "question" not in classification:
-                # Make sure it's not "help with question" or similar
-                if "question" not in classification:
-                    logger.debug(f"Classified as HELP: {query}")
-                    return IntentType.HELP
+            elif "help" in classification_lower and "question" not in classification_lower:
+                logger.debug(f"Classified as HELP: {query}")
+                return IntentType.HELP
             
             # Default to question (safest - better to retrieve than to miss)
             logger.debug(f"Classified as FAQ_QUESTION (default): {query}")

@@ -15,21 +15,48 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Check if Streamlit is available
+# Check if Poetry is available and use it if possible
+if command -v poetry &> /dev/null; then
+    # Check if Streamlit is available in Poetry environment
+    if ! poetry run python3 -c "import streamlit" 2>/dev/null; then
+        echo "❌ Streamlit is not installed in Poetry environment"
+        echo "💡 Please install dependencies first:"
+        echo "   poetry install"
+        exit 1
+    fi
+    USE_POETRY=true
+else
+    # Fallback to system Python
 if ! python3 -c "import streamlit" 2>/dev/null; then
     echo "❌ Streamlit is not installed"
     echo "💡 Please install dependencies first:"
+        echo "   poetry install"
+        echo "   or"
     echo "   pip3 install streamlit"
     exit 1
+    fi
+    USE_POETRY=false
 fi
 
 # Check if llama-cpp-python is available
+if [ "$USE_POETRY" = true ]; then
+    if ! poetry run python3 -c "from llama_cpp import Llama" 2>/dev/null; then
+        echo "⚠️  llama-cpp-python is not installed in Poetry environment"
+        echo ""
+        echo "💡 To install all dependencies, run:"
+        echo "   poetry install"
+        exit 1
+    fi
+else
 if ! python3 -c "from llama_cpp import Llama" 2>/dev/null; then
     echo "⚠️  llama-cpp-python is not installed"
     echo ""
     echo "💡 To install all dependencies, run:"
+        echo "   poetry install"
+        echo "   or"
     echo "   ./install_dependencies.sh"
     exit 1
+    fi
 fi
 
 # Kill any existing Streamlit processes to avoid conflicts
@@ -88,10 +115,15 @@ echo "   - Look for 'You can now view your Streamlit app' message"
 echo "   - Press Ctrl+C to stop"
 echo ""
 
-# Use system Python's streamlit to match the ChromaDB version used to build the vector store
-# This ensures version compatibility
+# Use Poetry environment if available, otherwise system Python
+if [ "$USE_POETRY" = true ]; then
+    echo "Using: Poetry environment"
+    PYTHON_CMD="poetry run python3"
+else
 PYTHON3_STREAMLIT=$(python3 -c "import streamlit; import sys; print(sys.executable)" 2>/dev/null || echo "python3")
 echo "Using: $PYTHON3_STREAMLIT"
+    PYTHON_CMD="$PYTHON3_STREAMLIT"
+fi
 
 # Run the RAG chatbot
-$PYTHON3_STREAMLIT -m streamlit run chatbot/rag_chatbot_app.py -- --model "$MODEL" --k "$K" --synthesis-strategy "$STRATEGY" --max-new-tokens "$MAX_TOKENS"
+$PYTHON_CMD -m streamlit run chatbot/rag_chatbot_app.py -- --model "$MODEL" --k "$K" --synthesis-strategy "$STRATEGY" --max-new-tokens "$MAX_TOKENS"

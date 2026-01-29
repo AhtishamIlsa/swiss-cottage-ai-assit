@@ -1,9 +1,20 @@
 ---
-category: "Guest Support"
-faq_id: "faq_122"
-source: "Google Sheets"
-question: "Who is the cottage manager and how can I contact him?"
-type: "qa_pair"
+category: Guest Support
+faq_id: faq_122
+intent: booking
+optional_slots:
+- season
+question: Who is the cottage manager and how can I contact him?
+required_slots:
+- guests
+- dates
+- room_type
+- family
+slot_extraction_hints: "  guests: number of guests or people\n  dates: check-in and\
+  \ check-out dates\n  room_type: cottage 7, 9, or 11\n  family: whether booking is\
+  \ for family or friends\n  season: weekday, weekend, peak, or off-peak"
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Guest Support

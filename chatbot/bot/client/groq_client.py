@@ -120,28 +120,48 @@ class GroqClient:
         """
         system_content = self.model_settings.system_template if self.model_settings else "You are a helpful assistant."
 
-        stream = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=max_new_tokens,
-            temperature=0.7,
-            stream=True,
-        )
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=max_new_tokens,
+                temperature=0.7,
+                stream=True,
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "429" in error_msg or "rate limit" in error_msg or "rate_limit" in error_msg:
+                raise RuntimeError(
+                    f"Rate limit error: {e}\n\n"
+                    "Please wait a few seconds and try again. "
+                    "You may need to upgrade your Groq API tier for higher rate limits."
+                ) from e
+            raise
 
         def streamer():
-            for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    # Format to match LamaCppClient's format
-                    yield {
-                        "choices": [{
-                            "delta": {
-                                "content": chunk.choices[0].delta.content
-                            }
-                        }]
-                    }
+            try:
+                for chunk in stream:
+                    if chunk.choices[0].delta.content:
+                        # Format to match LamaCppClient's format
+                        yield {
+                            "choices": [{
+                                "delta": {
+                                    "content": chunk.choices[0].delta.content
+                                }
+                            }]
+                        }
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "429" in error_msg or "rate limit" in error_msg or "rate_limit" in error_msg:
+                    raise RuntimeError(
+                        f"Rate limit error during streaming: {e}\n\n"
+                        "Please wait a few seconds and try again. "
+                        "You may need to upgrade your Groq API tier for higher rate limits."
+                    ) from e
+                raise
 
         return streamer()
 

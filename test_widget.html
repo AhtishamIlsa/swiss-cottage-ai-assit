@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chatbot Widget Test</title>
     <!-- Chatbot Widget CSS -->
-    <link rel="stylesheet" href="http://localhost:8000/static/css/chatbot-widget.css">
+    <link rel="stylesheet" href="https://swisscottaggesai.ilsainteractive.com.pk/static/css/chatbot-widget.css">
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -21,6 +21,18 @@
             padding: 20px;
             border-radius: 8px;
             margin: 20px 0;
+        }
+        @media (max-width: 768px) {
+            body {
+                padding: 20px 16px;
+            }
+            .info {
+                padding: 16px;
+                margin: 16px 0;
+            }
+            h1 {
+                font-size: 24px;
+            }
         }
     </style>
 </head>
@@ -51,6 +63,9 @@
     <p style="height: 1000px;">Spacer content to demonstrate scrolling...</p>
 
     <!-- Chatbot Widget JavaScript -->
-    <script src="http://localhost:8000/static/js/chatbot-widget.js"></script>
-</body>
+    <script 
+        src="https://swisscottaggesai.ilsainteractive.com.pk/static/js/chatbot-widget.js"
+        data-api-url="https://swisscottaggesai.ilsainteractive.com.pk">
+    </script>
+</body>x
 </html>

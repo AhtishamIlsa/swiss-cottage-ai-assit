@@ -12,7 +12,13 @@ if str(chatbot_dir) not in sys.path:
     sys.path.insert(0, str(chatbot_dir))
 
 from bot.client.groq_client import GroqClient
-from bot.client.lama_cpp_client import LamaCppClient
+# Lazy import for LamaCppClient to avoid requiring llama_cpp module
+try:
+    from bot.client.lama_cpp_client import LamaCppClient
+except ImportError:
+    # llama_cpp not installed - will use Groq only
+    LamaCppClient = None
+
 from bot.conversation.intent_router import IntentRouter
 from bot.conversation.ctx_strategy import (
     BaseSynthesisStrategy,
@@ -26,15 +32,39 @@ from helpers.log import get_logger
 logger = get_logger(__name__)
 
 # Cache for initialized components
-_llm_client: Optional[LamaCppClient | GroqClient] = None
+_llm_client: Optional[GroqClient] = None  # Type hint simplified since LamaCppClient may not be available
 _vector_store: Optional[Chroma] = None
 _intent_router: Optional[IntentRouter] = None
 _ctx_synthesis_strategy: Optional[BaseSynthesisStrategy] = None
 
 
+def clear_vector_store_cache():
+    """Clear the cached vector store instance (useful after rebuilding)."""
+    global _vector_store
+    _vector_store = None
+    logger.info("Vector store cache cleared")
+
+
+def clear_vector_store_cache():
+    """Clear the cached vector store instance (useful after rebuilding)."""
+    global _vector_store
+    _vector_store = None
+    logger.info("Vector store cache cleared")
+
+
 def get_root_folder() -> Path:
     """Get the root folder of the project."""
     return Path(__file__).resolve().parent.parent.parent
+
+
+def is_query_optimization_enabled() -> bool:
+    """
+    Check if query optimization is enabled via environment variable.
+    
+    Returns:
+        bool: True if query optimization is enabled (default: True)
+    """
+    return os.getenv("ENABLE_QUERY_OPTIMIZATION", "true").lower() == "true"
 
 
 def get_model_folder() -> Path:
@@ -62,7 +92,7 @@ def get_vector_store_path() -> Path:
 def get_llm_client(
     model_name: str = "llama-3.1",
     use_groq: bool = True,
-) -> LamaCppClient | GroqClient:
+) -> GroqClient:  # Return type simplified - will always use Groq if llama_cpp not available
     """
     Get or initialize LLM client (cached).
     
@@ -93,23 +123,39 @@ def get_llm_client(
                 use_groq = False
         
         if not use_groq:
-            model_settings = get_model_settings(model_name)
-            _llm_client = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
-            logger.info("✅ Using local model (llama.cpp)")
+            if LamaCppClient is None:
+                logger.error("llama_cpp module not installed. Cannot use local model. Falling back to Groq.")
+                # Fallback to Groq if llama_cpp not available
+                model_settings = get_model_settings(model_name)
+                _llm_client = GroqClient(
+                    api_key=groq_api_key,
+                    model_name="llama-3.1-8b-instant",
+                    model_settings=model_settings
+                )
+                logger.info("✅ Using Groq API (fallback - llama_cpp not available)")
+            else:
+                model_settings = get_model_settings(model_name)
+                _llm_client = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
+                logger.info("✅ Using local model (llama.cpp)")
     
     return _llm_client
 
 
-def get_vector_store() -> Chroma:
+def get_vector_store(force_reload: bool = False) -> Chroma:
     """
     Get or initialize vector store (cached).
+    
+    Args:
+        force_reload: If True, force reload even if cached
     
     Returns:
         Chroma vector store instance
     """
     global _vector_store
     
-    if _vector_store is None:
+    if _vector_store is None or force_reload:
+        if force_reload:
+            _vector_store = None
         vector_store_path = get_vector_store_path()
         embedding = Embedder()
         
@@ -121,12 +167,21 @@ def get_vector_store() -> Chroma:
             error_msg = str(e).lower()
             logger.error(f"Error loading vector store: {e}")
             if "no such column" in error_msg or "topic" in error_msg or "operationalerror" in error_msg:
-                logger.error("ChromaDB schema mismatch detected!")
-                raise RuntimeError(
-                    "Vector store schema error detected. Please rebuild the vector index: "
-                    "python3 chatbot/memory_builder.py --chunk-size 512 --chunk-overlap 25"
-                )
-            raise
+                logger.error("ChromaDB schema mismatch detected! Attempting to clear cache and reload...")
+                # Clear cache and try once more
+                _vector_store = None
+                try:
+                    _vector_store = Chroma(persist_directory=str(vector_store_path), embedding=embedding)
+                    doc_count = _vector_store.collection.count()
+                    logger.info(f"Successfully reloaded vector store with {doc_count} documents after cache clear")
+                except Exception as e2:
+                    logger.error(f"Failed to reload vector store: {e2}")
+                    raise RuntimeError(
+                        "Vector store schema error detected. Please rebuild the vector index: "
+                        "python3 chatbot/memory_builder.py --chunk-size 512 --chunk-overlap 25"
+                    )
+            else:
+                raise
     
     return _vector_store
 

@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_073"
-source: "Google Sheets"
-question: "What nearby picnic spots and day-trip locations are available?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_073
+intent: location
+optional_slots: []
+question: What nearby picnic spots and day-trip locations are available?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

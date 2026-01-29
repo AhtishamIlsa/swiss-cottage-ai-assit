@@ -32,3 +32,12 @@ class ChatHistory(list):
         """
         chat_history = "\n".join([msg for msg in self])
         return chat_history
+    
+    def get_last_message(self) -> str | None:
+        """
+        Get the last message from chat history.
+        
+        Returns:
+            Last message string or None if history is empty
+        """
+        return self[-1] if len(self) > 0 else None

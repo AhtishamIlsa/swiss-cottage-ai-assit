@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_077"
-source: "Google Sheets"
-question: "Do the cottages have a mountain or valley view?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_077
+intent: location
+optional_slots: []
+question: Do the cottages have a mountain or valley view?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

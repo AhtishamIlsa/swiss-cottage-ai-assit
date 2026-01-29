@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_067"
-source: "Google Sheets"
-question: "Are there walking or hiking trails nearby?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_067
+intent: location
+optional_slots: []
+question: Are there walking or hiking trails nearby?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_063"
-source: "Google Sheets"
-question: "How far is it from Islamabad?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_063
+intent: location
+optional_slots: []
+question: How far is it from Islamabad?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

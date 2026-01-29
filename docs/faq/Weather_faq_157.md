@@ -1,9 +1,14 @@
 ---
-category: "Weather"
-faq_id: "faq_157"
-source: "Google Sheets"
-question: "Does it snow at Swiss Cottages?"
-type: "qa_pair"
+category: Weather
+faq_id: faq_157
+intent: faq_question
+optional_slots: []
+question: Does it snow at Swiss Cottages?
+required_slots: []
+slot_extraction_hints: "  guests: number of guests or people\n  room_type: cottage\
+  \ 7, 9, or 11"
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Weather

@@ -1,9 +1,14 @@
 ---
-category: "Facilities & Amenities"
-faq_id: "faq_035"
-source: "Google Sheets"
-question: "Is Wi-Fi available?"
-type: "qa_pair"
+category: Facilities & Amenities
+faq_id: faq_035
+intent: facilities
+optional_slots:
+- room_type
+question: Is Wi-Fi available?
+required_slots: []
+slot_extraction_hints: '  room_type: cottage 7, 9, or 11'
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Facilities & Amenities

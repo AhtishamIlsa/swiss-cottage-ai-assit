@@ -1,9 +1,12 @@
 ---
-category: "Safety & Security"
-faq_id: "faq_109"
-source: "Google Sheets"
-question: "Is Swiss Cottages secure?"
-type: "qa_pair"
+category: Safety & Security
+faq_id: faq_109
+intent: safety
+optional_slots: []
+question: Is Swiss Cottages secure?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Safety & Security

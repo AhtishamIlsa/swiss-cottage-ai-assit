@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_075"
-source: "Google Sheets"
-question: "What is the maximum number of guests across all cottages?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_075
+intent: location
+optional_slots: []
+question: What is the maximum number of guests across all cottages?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

@@ -1,9 +1,12 @@
 ---
-category: "Weather"
-faq_id: "faq_162"
-source: "Google Sheets"
-question: "Are roads accessible during snowfall?"
-type: "qa_pair"
+category: Weather
+faq_id: faq_162
+intent: faq_question
+optional_slots: []
+question: Are roads accessible during snowfall?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Weather

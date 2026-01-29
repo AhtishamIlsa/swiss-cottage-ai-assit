@@ -1,9 +1,14 @@
 ---
-category: "Reviews"
-faq_id: "faq_147"
-source: "Google Sheets"
-question: "Are the reviews for Swiss Cottages genuine and verified?"
-type: "qa_pair"
+category: Reviews
+faq_id: faq_147
+intent: faq_question
+optional_slots: []
+question: Are the reviews for Swiss Cottages genuine and verified?
+required_slots: []
+slot_extraction_hints: "  guests: number of guests or people\n  room_type: cottage\
+  \ 7, 9, or 11"
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Reviews

@@ -1,9 +1,12 @@
 ---
-category: "Fallback & General"
-faq_id: "faq_135"
-source: "Google Sheets"
-question: "Can I talk to a human?"
-type: "qa_pair"
+category: Fallback & General
+faq_id: faq_135
+intent: faq_question
+optional_slots: []
+question: Can I talk to a human?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Fallback & General

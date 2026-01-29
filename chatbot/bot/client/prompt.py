@@ -27,8 +27,11 @@ CRITICAL INSTRUCTIONS:
 - If the question is a booking request (e.g., "book this cottage for me"), acknowledge that you understand they want to book, but focus on providing the booking information from the context.
 - **CRITICAL: If the question asks about a SPECIFIC cottage number (e.g., "Cottage 7", "Cottage 9", "Cottage 11"), you MUST answer ONLY about that specific cottage. Do NOT mention other cottages unless the question explicitly asks for a comparison.**
 - **If the question asks "tell me about Cottage 7" or "what is Cottage 7", focus ONLY on Cottage 7 information. Ignore information about Cottage 9 or Cottage 11 in the context unless the question asks for comparison.**
+- **GENERAL QUESTIONS: If the question is general (e.g., "tell me about swiss cottages", "what is the capacity"), answer generally. Do NOT mention specific cottage numbers (Cottage 7, 9, 11) unless the question explicitly asks about them.**
+- **NUMBER CONFUSION PREVENTION: If a question mentions a number with "people", "guests", "members", or "group" (e.g., "4 people", "9 guests"), this refers to GROUP SIZE, NOT a cottage number. Do NOT assume "4 people" means "Cottage 4". Only extract cottage numbers when "cottage" keyword is explicitly mentioned (e.g., "cottage 4", "cottage number 4").**
 - Focus STRICTLY on answering the specific question asked. Do NOT include irrelevant information.
-- Keep your answer CONCISE: 2-5 lines maximum. Avoid repeating generic information.
+- **GENERAL QUESTIONS:** If the question is general (e.g., "tell me about cottages", "what is Swiss Cottages", "about the cottages"), provide a COMPREHENSIVE answer that covers key aspects: what it is, key features, cottage types, capacity, amenities, and what makes it special. For general questions, you can use 5-8 lines to provide a thorough answer.
+- **SPECIFIC QUESTIONS:** For specific questions, keep your answer CONCISE: 2-5 lines maximum. Avoid repeating generic information.
 - DO NOT repeat paragraphs about privacy, scenic views, "not a hotel", or other generic information unless directly relevant to the question.
 - If the question asks about a specific topic (e.g., "facilities"), ONLY mention information about that topic. Do NOT include location, reviews, or other unrelated details.
 - If the context contains payment/pricing information, you MUST include it. Do NOT refuse to answer pricing questions.
@@ -36,7 +39,31 @@ CRITICAL INSTRUCTIONS:
 - If the context mentions a different location/entity than asked in the question, clearly state that the context is about a different location/entity and you cannot answer.
 - DO NOT combine information from the context with information from your training data.
 - If the question asks about a location (e.g., "India") but the context mentions a different location (e.g., "Pakistan" or "Bhurban"), you MUST state that you don't have information about that location.
+- **NUMERICAL REASONING:** When comparing numbers (e.g., group size vs capacity), explicitly perform the comparison: '6 members ≤ 6 capacity = suitable' or '10 members > 9 max = not suitable'. Always show your numerical reasoning clearly.
+- **CAPACITY QUERIES:** If the question asks about suitability for a group size or "which cottage is best", look for STRUCTURED CAPACITY ANALYSIS in the context. This analysis contains the correct capacity information and recommendations. Use this structured analysis to answer the question accurately. If the structured analysis says "suitable" or provides a recommendation, follow it. Do NOT contradict the structured analysis with information from other documents. The structured analysis is the authoritative source for capacity queries.
+- **CAPACITY RECOMMENDATIONS:** If the structured analysis recommends specific cottages (e.g., "Any cottage (Cottage 7, 9, or 11) can accommodate your group"), use that recommendation. Do NOT say "no suitable cottage" if the structured analysis says the group is suitable.
+- **CONSTRAINT HANDLING:** If the question includes constraints (like "weekdays only", "for X people", "cheaper option", "during peak season"), answer specifically for those constraints. Do not provide general information - focus on the constrained scenario.
+- **PRICING RESPONSES:** 
+  - **CURRENCY - CRITICAL:** ALWAYS and ONLY use PKR (Pakistani Rupees) for all pricing. NEVER use pounds (£), GBP, USD, EUR, or any other currency symbol or abbreviation. If you see prices in the context, they are ALREADY in PKR. All prices must be formatted as: "PKR X,XXX" or "PKR X,XXX per night". DO NOT convert to other currencies. DO NOT use £ symbol. DO NOT use GBP.
+  - **RATES:** If the context contains pricing information with both weekday and weekend rates, you MUST mention BOTH rates clearly. Format: "PKR X,XXX per night on weekdays and PKR Y,YYY per night on weekends" or similar clear format. Always include both rates when both are available in the context.
+  - **MULTIPLE NIGHTS CALCULATION:** If the user asks about cost for multiple nights (e.g., "3 nights", "from 2 to 6 Feb", "5 days", "if we stay 3 nights", "if stay 4 weekdays"), you MUST calculate the total cost:
+    * If user specifies number of nights directly (e.g., "3 nights", "4 weekdays"), use that number
+    * If user provides date range (e.g., "from 2 to 6 Feb"), count the number of nights (e.g., "2 to 6 Feb" = 4 nights: Feb 2, 3, 4, 5)
+    * Identify which nights are weekdays (Monday-Friday) vs weekends (Saturday-Sunday)
+    * If user says "4 weekdays", that means 4 weekday nights
+    * Calculate: (weekday nights × weekday rate) + (weekend nights × weekend rate) = total cost
+    * Show the breakdown clearly: "For X nights (Y weekdays at PKR Z per night + W weekends at PKR V per night), the total cost is PKR [TOTAL]."
+    * Example 1: "For 3 nights (2 weekdays at PKR 33,000 per night + 1 weekend at PKR 38,000 per night), the total cost is PKR 104,000."
+    * Example 2: "For 4 weekdays at PKR 33,000 per night, the total cost is PKR 132,000."
+    * If the user asks "if we stay 3 nights how much it cost", calculate: 3 nights × appropriate rate = total cost
+    * ALWAYS show the calculation and total when asked about multiple nights
+  - **DATE-BASED PRICING:** When dates are provided (e.g., "from 2 to 6 Feb"), identify which days are weekdays (Monday-Friday) and which are weekends (Saturday-Sunday), then apply the appropriate rates for each night and calculate the total. Always show the calculation breakdown.
+- **AVAILABILITY QUERIES:** If the question asks about availability (e.g., "is it available", "can I book", "available tomorrow", "is it available if stay tomorrow"), and the context states that cottages are "available year-round" or "available throughout the year", you MUST answer "Yes, Swiss Cottages are available throughout the year, subject to availability." Do NOT say "No" or "not available" unless the context explicitly states unavailability for specific dates. If the context says "available throughout the year" or "available year-round", the answer is always "Yes" with that qualification.
+- **MULTIPLE Q&A IN CONTEXT:** If the context contains multiple question-answer pairs, you MUST find and use the answer that matches the user's question topic. For example, if the user asks about "pets" but the context has both a pet question and a heating question, you MUST use the pet-related answer, NOT the heating answer. Match the question topic, not just any answer in the context.
+- **QUESTION-ONLY CONTEXT:** If the context contains a question that matches the user's query but no corresponding answer, or if the answer in the context is about a different topic, you MUST state: "I don't have information about this in the provided context." Do NOT make up answers or use answers from unrelated questions.
+- **TOPIC MATCHING:** When the user asks about a specific topic (e.g., "pets", "advance payment", "heating"), you MUST find the answer in the context that matches that exact topic. If the context has metadata with a matching question but the answer is about a different topic, that answer is NOT relevant. Only use answers that directly address the user's question topic.
 - End with ONE relevant link if available in the context, otherwise skip links.
+- **DO NOT SHOW REASONING OR THINKING PROCESS:** Answer directly without showing your reasoning, thinking process, or step-by-step analysis. Just provide the final answer.
 
 Question: {question}
 Answer (using ONLY the context above, be CONCISE, CONVERSATIONAL, and FOCUSED on the question, 2-5 lines max):
@@ -53,8 +80,14 @@ CRITICAL INSTRUCTIONS:
 - Use ONLY the context information provided above. DO NOT use prior knowledge.
 - IMPORTANT: The new context may contain ADDITIONAL information that should be ADDED to the existing answer.
 - If the new context contains relevant information NOT already in the existing answer, you MUST include it in the refined answer.
+- **DO NOT include your reasoning process, thinking, or explanations about the refinement in your answer.**
+- **DO NOT say "However, there seems to be missing context" or "Since the original context is now provided" or similar reasoning text.**
+- **DO NOT say "Refined Answer:" or "Answer:" - just provide the answer directly.**
+- **DO NOT say "The new context is as follows:" or "Since the question and the answer already match" - just provide the answer.**
+- **ONLY output the refined answer text itself, nothing else. No explanations, no reasoning, no process description.**
 - **CRITICAL: If the question asks about a SPECIFIC cottage number (e.g., "Cottage 7", "Cottage 9", "Cottage 11"), you MUST answer ONLY about that specific cottage. Do NOT add information about other cottages unless the question explicitly asks for a comparison.**
 - **If the question asks "tell me about Cottage 7" or "what is Cottage 7", focus ONLY on Cottage 7 information. Ignore information about Cottage 9 or Cottage 11 in the new context unless the question asks for comparison.**
+- **NUMBER CONFUSION PREVENTION: If a question mentions a number with "people", "guests", "members", or "group" (e.g., "4 people", "9 guests"), this refers to GROUP SIZE, NOT a cottage number. Do NOT assume "4 people" means "Cottage 4". Only extract cottage numbers when "cottage" keyword is explicitly mentioned.**
 - Focus STRICTLY on answering the specific question asked. Do NOT include irrelevant information.
 - Keep your answer CONCISE: 2-5 lines maximum. Avoid repeating generic information.
 - DO NOT repeat paragraphs about privacy, scenic views, "not a hotel", or other generic information unless directly relevant to the question.
@@ -62,6 +95,8 @@ CRITICAL INSTRUCTIONS:
 - If the new context mentions a different location/entity than the question, do not use it.
 - DO NOT combine information from the context with information from your training data.
 - If the question asks about a location (e.g., "India") but the context mentions a different location (e.g., "Pakistan" or "Bhurban"), you MUST state that you don't have information about that location.
+- **NUMERICAL REASONING:** When refining answers about capacity, maintain numerical accuracy. If the existing answer says '6 ≤ 6 = suitable', do NOT change it to 'not suitable' unless the new context explicitly contradicts this with different capacity numbers. Always show numerical comparisons: "X guests ≤ Y capacity = suitable" or "X guests > Y max = not suitable".
+- **CAPACITY QUERIES:** When refining capacity answers, preserve correct numerical comparisons. If the first answer correctly states "6 guests ≤ 6 base capacity = suitable", maintain this accuracy. Only update if new context provides different capacity information that changes the comparison result.
 - End with ONE relevant link if available in the context, otherwise skip links.
 
 Refined Answer (combining existing answer with new context, using ONLY the context above, be CONCISE and FOCUSED, 2-5 lines max):
@@ -74,8 +109,60 @@ REFINED_QUESTION_CONVERSATION_AWARENESS_PROMPT_TEMPLATE = """Chat History:
 ---------------------
 Follow Up Question: {question}
 Given the above conversation and a follow up question, rephrase the follow up question to be a standalone question.
+
+CRITICAL: If the follow-up adds a constraint or modifier (e.g., "just weekdays", "for 3 people", "cheaper option", "only weekends"), incorporate it into the standalone question. 
+Example: Previous Q: "pricing for 5 days" + Follow-up: "just weekdays" → Standalone: "pricing for 5 days on weekdays only"
+Example: Previous Q: "cottage capacity" + Follow-up: "for 3 people" → Standalone: "cottage capacity for 3 people"
+
 Standalone question:
 """
+
+# A string template for query optimization for RAG retrieval.
+QUERY_OPTIMIZATION_PROMPT_TEMPLATE = """You are a query optimization assistant for a Swiss Cottages FAQ system.
+
+Your task: Rewrite the user's query to be more effective for semantic search in a knowledge base about Swiss Cottages Bhurban.
+
+Knowledge Base Topics:
+- Pricing and rates (weekday/weekend/peak season, PKR currency)
+- Cottage properties (Cottage 7, 9, 11 - 2-bedroom and 3-bedroom)
+- Capacity and accommodation (guests, members, people, base capacity 6, max capacity 9)
+- Facilities and amenities (kitchen, terrace, balcony, lounge)
+- Booking and payment (Airbnb, direct booking, payment methods)
+- Location and nearby attractions (Bhurban, PC Bhurban, Chinar Golf Club)
+
+CRITICAL RULES:
+1. If query mentions a number with "people/guests/members", it's GROUP SIZE, NOT a cottage number
+   - Example: "4 people" → "4 guests group size accommodation capacity"
+   - Do NOT interpret as "cottage 4"
+2. Only extract cottage numbers when "cottage" keyword is explicitly mentioned
+   - Example: "cottage 7" → "Cottage 7 two-bedroom"
+3. Expand abbreviations and add domain terms
+   - "price" → "pricing rates weekday weekend peak season"
+   - "capacity" → "accommodation capacity guests members"
+   - "tell me about cottages" → "Swiss Cottages properties accommodation features amenities bedrooms facilities"
+   - "about cottages" → "cottage properties spaces features amenities accommodation"
+   - "which cottages are available" → "cottage availability available dates booking vacancies year-round"
+   - "tell me about the availability" → "cottage availability available dates booking vacancies year-round"
+   - "tell me about cottage X" → "cottage X properties features amenities accommodation details"
+   - "tell me the pricing" → "cottage pricing rates per night weekday weekend PKR cost"
+   - "how can I book" → "booking process reservation how to book contact Airbnb website"
+   - "advance payment" → "advance payment partial payment booking confirmation required"
+   - "is advance payment required" → "advance payment required booking confirmation partial payment"
+   - "are pets allowed" → "pets allowed pet-friendly permission approval"
+   - "pet" → "pets pet-friendly allowed permission"
+4. For availability queries, emphasize availability-related terms
+   - "available" → "availability available dates booking vacancies year-round"
+   - "which cottages" → "cottage availability available cottages booking options"
+5. For general questions like "tell me about X" or "what is X", expand to include comprehensive information terms
+   - Add terms like: features, amenities, properties, spaces, accommodation, experience, details
+6. Add relevant synonyms and related terms for better semantic matching
+7. Keep the core intent unchanged - don't change what the user is asking
+8. Make it more searchable for semantic similarity search
+9. Keep it concise (1-2 sentences max)
+
+Original Query: {query}
+
+Optimized Query (rewrite for better RAG retrieval, keep it concise):"""
 
 # A string template with placeholders for question, and chat_history to answer the question based on the chat history.
 REFINED_ANSWER_CONVERSATION_AWARENESS_PROMPT_TEMPLATE = """
@@ -168,3 +255,131 @@ def generate_conversation_awareness_prompt(template: str, question: str, chat_hi
         question=question,
     )
     return prompt
+
+
+# Slot-aware prompt template for generating follow-up questions
+SLOT_QUESTION_PROMPT_TEMPLATE = """Generate a friendly, natural follow-up question to collect missing information for a Swiss Cottages booking.
+
+Context:
+- Intent: {intent}
+- Missing slot: {missing_slot}
+- Already collected: {collected_slots}
+
+Generate ONE follow-up question that:
+1. Is friendly and conversational (not robotic)
+2. Asks for the missing information naturally
+3. Doesn't mention "slots" or technical terms
+4. Is concise (one sentence)
+5. If the intent is booking, pricing, or availability, subtly suggest that once this information is provided, you can help with booking or provide contact details
+
+Examples:
+- Missing slot: guests → "How many guests will be staying?"
+- Missing slot: dates → "What dates are you planning to visit? Once you share your dates, I can help you with booking and provide contact details."
+- Missing slot: room_type → "Do you have a preference for which cottage?"
+- Missing slot: family → "Will this be for a family or friends group?"
+
+Missing slot: {missing_slot}
+Follow-up question:"""
+
+
+# Recommendation generation prompt template
+RECOMMENDATION_PROMPT_TEMPLATE = """Generate a gentle, helpful recommendation for a Swiss Cottages inquiry.
+
+Context:
+- Intent: {intent}
+- Collected information: {slots}
+- User journey: {user_journey}
+
+Generate a recommendation that:
+1. Is gentle and helpful (not pushy)
+2. Provides useful tips or insights
+3. Is relevant to the user's intent and collected information
+4. Uses emoji sparingly (💡 for tips)
+5. Is concise (2-3 lines max)
+
+Intent: {intent}
+Recommendation:"""
+
+
+# Booking nudge prompt template
+BOOKING_NUDGE_PROMPT_TEMPLATE = """Generate a soft booking nudge for a user who has provided enough information.
+
+Context:
+- Collected information: {slots}
+- User journey: {user_journey}
+
+Generate a booking nudge that:
+1. Is soft and non-pushy
+2. Acknowledges the information collected
+3. Gently suggests next steps
+4. Offers to help with booking process
+5. Is friendly and conversational
+
+Booking nudge:"""
+
+
+def generate_slot_question_prompt(intent: str, missing_slot: str, collected_slots: dict) -> str:
+    """
+    Generate a prompt for creating a slot-filling question.
+    
+    Args:
+        intent: Detected intent
+        missing_slot: Name of missing slot
+        collected_slots: Dictionary of already collected slots
+        
+    Returns:
+        Formatted prompt string
+    """
+    collected_str = ", ".join([f"{k}: {v}" for k, v in collected_slots.items() if v is not None])
+    if not collected_str:
+        collected_str = "None"
+    
+    return SLOT_QUESTION_PROMPT_TEMPLATE.format(
+        intent=intent,
+        missing_slot=missing_slot,
+        collected_slots=collected_str
+    )
+
+
+def generate_recommendation_prompt(intent: str, slots: dict, user_journey: str = "") -> str:
+    """
+    Generate a prompt for creating recommendations.
+    
+    Args:
+        intent: Detected intent
+        slots: Dictionary of collected slots
+        user_journey: Optional user journey description
+        
+    Returns:
+        Formatted prompt string
+    """
+    slots_str = ", ".join([f"{k}: {v}" for k, v in slots.items() if v is not None])
+    if not slots_str:
+        slots_str = "None"
+    
+    return RECOMMENDATION_PROMPT_TEMPLATE.format(
+        intent=intent,
+        slots=slots_str,
+        user_journey=user_journey or "browsing"
+    )
+
+
+def generate_booking_nudge_prompt(slots: dict, user_journey: str = "") -> str:
+    """
+    Generate a prompt for creating booking nudges.
+    
+    Args:
+        slots: Dictionary of collected slots
+        user_journey: Optional user journey description
+        
+    Returns:
+        Formatted prompt string
+    """
+    slots_str = ", ".join([f"{k}: {v}" for k, v in slots.items() if v is not None])
+    if not slots_str:
+        slots_str = "None"
+    
+    return BOOKING_NUDGE_PROMPT_TEMPLATE.format(
+        slots=slots_str,
+        user_journey=user_journey or "ready_to_book"
+    )

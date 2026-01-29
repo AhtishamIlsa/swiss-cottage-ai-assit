@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_065"
-source: "Google Sheets"
-question: "What places are nearby?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_065
+intent: location
+optional_slots: []
+question: What places are nearby?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

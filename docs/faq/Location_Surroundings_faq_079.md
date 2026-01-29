@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_079"
-source: "Google Sheets"
-question: "Are BBQ facilities available?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_079
+intent: location
+optional_slots: []
+question: Are BBQ facilities available?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

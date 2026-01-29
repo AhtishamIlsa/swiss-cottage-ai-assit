@@ -1,9 +1,14 @@
 ---
-category: "Weather"
-faq_id: "faq_161"
-source: "Google Sheets"
-question: "Can weather affect travel to Swiss Cottages?"
-type: "qa_pair"
+category: Weather
+faq_id: faq_161
+intent: faq_question
+optional_slots: []
+question: Can weather affect travel to Swiss Cottages?
+required_slots: []
+slot_extraction_hints: "  guests: number of guests or people\n  room_type: cottage\
+  \ 7, 9, or 11"
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Weather

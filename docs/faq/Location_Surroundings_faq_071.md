@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_071"
-source: "Google Sheets"
-question: "What activities can we do near Swiss Cottages?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_071
+intent: location
+optional_slots: []
+question: What activities can we do near Swiss Cottages?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

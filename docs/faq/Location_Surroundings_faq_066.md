@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_066"
-source: "Google Sheets"
-question: "What sightseeing options are available nearby?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_066
+intent: location
+optional_slots: []
+question: What sightseeing options are available nearby?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

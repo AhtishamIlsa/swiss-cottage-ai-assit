@@ -1,9 +1,12 @@
 ---
-category: "Location & Surroundings"
-faq_id: "faq_064"
-source: "Google Sheets"
-question: "Is the road access easy, especially in rain or fog?"
-type: "qa_pair"
+category: Location & Surroundings
+faq_id: faq_064
+intent: location
+optional_slots: []
+question: Is the road access easy, especially in rain or fog?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Location & Surroundings

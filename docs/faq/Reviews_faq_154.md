@@ -1,9 +1,12 @@
 ---
-category: "Reviews"
-faq_id: "faq_154"
-source: "Google Sheets"
-question: "What if I am unsure after reading the reviews?"
-type: "qa_pair"
+category: Reviews
+faq_id: faq_154
+intent: faq_question
+optional_slots: []
+question: What if I am unsure after reading the reviews?
+required_slots: []
+source: Google Sheets
+type: qa_pair
 ---
 
 Category: Reviews

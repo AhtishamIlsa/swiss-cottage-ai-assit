@@ -4,6 +4,7 @@ version = "0.4.0"
 description = "RAG ChatBot"
 authors = ["Ahtisham Ulhaq <ahtisham.ullhaq@ilsainteractive.com.pk>"]
 readme = "README.md"
+package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.11"
@@ -19,7 +20,7 @@ groq = "~=1.0.0"
 numpy = "~=1.24.2"
 streamlit = "~=1.37.0"
 unstructured = { version = "~=0.14.3", extras = ["md", "pdf"] }
-chromadb = "~=0.4.18"
+chromadb = "0.4.18"
 transformers = "~=4.50.0"
 rich = "~=13.4.2"
 pyfiglet = "~=0.7"
@@ -46,6 +47,7 @@ nvidia-cusparse-cu12 = { version = "12.1.0.106", optional = true, platform = "!=
 nvidia-nccl-cu12 = { version = "2.18.1", optional = true, platform = "!=darwin" }
 nvidia-nvjitlink-cu12 = { version = "12.4.127", optional = true, platform = "!=darwin" }
 nvidia-nvtx-cu12 = { version = "12.1.105", optional = true, platform = "!=darwin" }
+python-frontmatter = "^1.1.0"
 
 [tool.poetry.extras]
 cuda-acceleration = [
