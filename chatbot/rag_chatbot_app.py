@@ -7,7 +7,7 @@ import os
 
 import streamlit as st
 from bot.client.groq_client import GroqClient
-# LamaCppClient imported lazily only when needed (not for Streamlit Cloud/Groq)
+from bot.client.lama_cpp_client import LamaCppClient
 from bot.conversation.chat_history import ChatHistory
 from bot.conversation.conversation_handler import answer_with_context, extract_content_after_reasoning, refine_question
 from bot.conversation.intent_router import IntentRouter, IntentType
@@ -149,7 +149,7 @@ def display_cottage_images(cottage_numbers: list[str], root_folder: Path):
 
 
 @st.cache_resource()
-def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2"):
+def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2") -> LamaCppClient | GroqClient:
     """
     Load LLM client - either Groq API (fast) or local model (slower but offline).
     
@@ -174,8 +174,6 @@ def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, 
             use_groq = False
     
     if not use_groq:
-        # Lazy import - only import LamaCppClient when actually needed (not for Streamlit Cloud)
-        from bot.client.lama_cpp_client import LamaCppClient
         model_settings = get_model_settings(model_name)
         llm = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
         logger.info("✅ Using local model (llama.cpp)")
