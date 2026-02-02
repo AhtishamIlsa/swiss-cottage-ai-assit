@@ -213,12 +213,15 @@ class SlotManager:
         if "nights" not in self.slots or self.slots["nights"] is None:
             nights_patterns = [
                 r"if\s+stay\s+(\d+)\s+nights?",
+                r"if\s+stays?\s+(\d+)\s+(?:nights?|days?)",  # "if we stays 5 days"
                 r"stay\s+(\d+)\s+nights?",
+                r"stays?\s+(\d+)\s+(?:nights?|days?)",  # "stays 5 days" or "stay 5 days"
                 r"(\d+)\s+nights?\s+stay",
                 r"(\d+)\s+nights?",
                 r"for\s+(\d+)\s+nights?",
                 r"(\d+)\s+days?\s+stay",
                 r"stay\s+(\d+)\s+days?",
+                r"(\d+)\s+days?",  # "5 days" anywhere in query
             ]
             for pattern in nights_patterns:
                 match = re.search(pattern, query_lower)

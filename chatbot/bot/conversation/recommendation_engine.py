@@ -181,7 +181,7 @@ class RecommendationEngine:
             nudge += "I can help you with the booking process or answer any other questions you have.\n\n"
             nudge += "**To proceed with booking, you can:**\n"
             nudge += "- Contact us: https://swisscottagesbhurban.com/contact-us/\n"
-            nudge += "- On-site caretaker (Jaafar): +92 301 5111817\n"
+            nudge += "- Cottage Manager (Abdullah): +92 300 1218563\n"
             
             # Add Airbnb links based on room type if available
             room_type = slots.get("room_type")
@@ -225,6 +225,79 @@ class RecommendationEngine:
                     return "💡 **Alternative:** Cottage 7 is a 2-bedroom option that might be available for your dates."
                 else:
                     return "💡 **Alternative:** Other cottages might be available. Would you like me to check availability for different dates?"
+        
+        return None
+    
+    def generate_image_recommendation(
+        self,
+        query: str,
+        slots: Dict[str, Any],
+        intent: Optional[IntentType] = None
+    ) -> Optional[str]:
+        """
+        Generate a gentle recommendation to show images when a cottage is mentioned.
+        
+        Args:
+            query: User's query string
+            slots: Current slot values
+            intent: Current intent
+            
+        Returns:
+            Image recommendation string or None
+        """
+        query_lower = query.lower()
+        
+        # Don't suggest images if user already asked for them
+        image_keywords = [
+            "image", "images", "photo", "photos", "picture", "pictures",
+            "show me", "see", "view", "gallery", "visual"
+        ]
+        if any(keyword in query_lower for keyword in image_keywords):
+            return None  # User already asked for images
+        
+        # Check if a cottage is mentioned
+        room_type = slots.get("room_type")
+        has_cottage_in_query = any(
+            cottage in query_lower 
+            for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]
+        )
+        
+        # Only suggest images if:
+        # 1. A specific cottage is mentioned (room_type slot or in query)
+        # 2. Intent is ROOMS, PRICING, or general inquiry about cottages
+        # 3. User hasn't already asked for images
+        
+        if room_type or has_cottage_in_query:
+            # Determine which cottage(s) to mention
+            cottage_mention = ""
+            if room_type:
+                if room_type == "cottage_7":
+                    cottage_mention = "Cottage 7"
+                elif room_type == "cottage_9":
+                    cottage_mention = "Cottage 9"
+                elif room_type == "cottage_11":
+                    cottage_mention = "Cottage 11"
+                elif room_type == "any":
+                    cottage_mention = "the cottages"
+            elif has_cottage_in_query:
+                # Extract cottage number from query
+                for num in ["7", "9", "11"]:
+                    if f"cottage {num}" in query_lower or f"cottage{num}" in query_lower:
+                        cottage_mention = f"Cottage {num}"
+                        break
+                if not cottage_mention:
+                    cottage_mention = "the cottages"
+            
+            if cottage_mention:
+                # Only suggest for relevant intents or general cottage questions
+                relevant_intents = [IntentType.ROOMS, IntentType.PRICING]
+                is_general_cottage_question = (
+                    "cottage" in query_lower and 
+                    intent not in [IntentType.BOOKING, IntentType.AVAILABILITY]
+                )
+                
+                if intent in relevant_intents or is_general_cottage_question:
+                    return f"📷 **Would you like to see images of {cottage_mention.lower()}?** Just ask and I can show you photos!"
         
         return None
     

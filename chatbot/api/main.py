@@ -293,6 +293,36 @@ def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int =
     return unique_paths
 
 
+def validate_and_fix_currency(answer: str, context: str = "") -> str:
+    """
+    Validate that answer doesn't contain dollar prices when context has PKR prices.
+    If dollar prices are found, log a warning.
+    """
+    if not answer:
+        return answer
+    
+    # Check if answer contains dollar prices
+    dollar_pattern = r'\$\d+'
+    has_dollar_prices = bool(re.search(dollar_pattern, answer))
+    
+    # Check if context contains PKR prices
+    pkr_pattern = r'PKR\s*\d+[,\d]*'
+    context_has_pkr = bool(re.search(pkr_pattern, context)) if context else False
+    
+    if has_dollar_prices and context_has_pkr:
+        logger.error(
+            f"⚠️ CRITICAL: Answer contains dollar prices but context has PKR prices!\n"
+            f"Answer: {answer[:200]}...\n"
+            f"Context snippet: {context[:200]}..."
+        )
+        # Try to extract PKR prices from context and suggest replacement
+        pkr_matches = re.findall(pkr_pattern, context)
+        if pkr_matches:
+            logger.warning(f"Context contains PKR prices: {pkr_matches}. Answer should use these instead of dollar prices.")
+    
+    return answer
+
+
 def clean_answer_text(answer: str) -> str:
     """
     Remove LLM reasoning and process text from answer.
@@ -1122,6 +1152,10 @@ async def chat(
                 # Clean answer text to remove LLM reasoning/process text
                 answer_text = clean_answer_text(answer_text)
                 
+                # Validate currency - check if answer has dollar prices when context has PKR
+                context_text = "\n".join([doc.page_content for doc in retrieved_contents[:3]])  # Get context from top 3 docs
+                answer_text = validate_and_fix_currency(answer_text, context_text)
+                
                 # Score confidence in retrieval and answer
                 confidence_scorer = get_confidence_scorer(llm)
                 retrieval_confidence = confidence_scorer.score_retrieval(
@@ -1159,7 +1193,7 @@ async def chat(
                             "I apologize, but I'm having trouble finding specific information about pets in our knowledge base. "
                             "For questions about pet policies, please contact us directly:\n"
                             "- Contact us: https://swisscottagesbhurban.com/contact-us/\n"
-                            "- On-site caretaker (Jaafar): +92 301 5111817"
+                            "- Cottage Manager (Abdullah): +92 300 1218563"
                         )
                     # Advance payment query getting wrong answer
                     elif any(phrase in query_lower for phrase in ["advance payment", "advance", "partial payment", "booking confirmation"]) and not any(word in answer_lower for word in ["advance", "partial", "payment", "confirm"]):
@@ -1168,7 +1202,7 @@ async def chat(
                             "I apologize, but I'm having trouble finding specific information about advance payment requirements. "
                             "For detailed payment and booking information, please contact us:\n"
                             "- Contact us: https://swisscottagesbhurban.com/contact-us/\n"
-                            "- On-site caretaker (Jaafar): +92 301 5111817"
+                            "- Cottage Manager (Abdullah): +92 300 1218563"
                         )
                     else:
                         # Try using only the first (most relevant) document
@@ -1207,14 +1241,14 @@ async def chat(
                                             "I apologize, but I'm having trouble finding specific information about pets in our knowledge base. "
                                             "For questions about pet policies, please contact us directly:\n"
                                             "- Contact us: https://swisscottagesbhurban.com/contact-us/\n"
-                                            "- On-site caretaker (Jaafar): +92 301 5111817"
+                                            "- Cottage Manager (Abdullah): +92 300 1218563"
                                         )
                                     elif any(phrase in query_lower for phrase in ["advance payment", "advance", "partial payment", "booking confirmation"]):
                                         answer_text = (
                                             "I apologize, but I'm having trouble finding specific information about advance payment requirements. "
                                             "For detailed payment and booking information, please contact us:\n"
                                             "- Contact us: https://swisscottagesbhurban.com/contact-us/\n"
-                                            "- On-site caretaker (Jaafar): +92 301 5111817"
+                                            "- Cottage Manager (Abdullah): +92 300 1218563"
                                         )
                                     else:
                                         answer_text = "I apologize, but I'm having trouble finding the exact information you're looking for. Could you please rephrase your question or ask about a specific aspect?"
@@ -1355,6 +1389,16 @@ async def chat(
                     )
                     if cross_rec:
                         response_parts.append(f"\n\n{cross_rec}")
+                
+                # Add image recommendation when cottage is mentioned (but not if user already asked for images)
+                if not is_image_request:  # Only suggest if user hasn't already asked for images
+                    image_rec = recommendation_engine.generate_image_recommendation(
+                        request.question,
+                        slot_manager.get_slots(),
+                        intent
+                    )
+                    if image_rec:
+                        response_parts.append(f"\n\n{image_rec}")
                 
                 # Add booking nudge if enough info available AND user seems ready
                 # Only show when user has asked about booking/availability
