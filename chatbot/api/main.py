@@ -4,12 +4,16 @@ import os
 import re
 import json
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from entities.document import Document
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response, StreamingResponse
+import asyncio
 
 import sys
 from pathlib import Path
@@ -23,11 +27,14 @@ from bot.conversation.conversation_handler import answer_with_context, refine_qu
 from bot.conversation.intent_router import IntentType
 from bot.conversation.refinement_handler import get_refinement_handler
 from bot.conversation.capacity_handler import get_capacity_handler
+from bot.conversation.pricing_handler import get_pricing_handler
 from bot.conversation.query_optimizer import optimize_query_for_rag
 from bot.conversation.sentiment_analyzer import get_sentiment_analyzer
 from bot.conversation.confidence_scorer import get_confidence_scorer
 from bot.conversation.recommendation_engine import get_recommendation_engine
 from bot.conversation.fallback_handler import get_fallback_handler
+from bot.conversation.cottage_registry import get_cottage_registry
+from bot.conversation.query_complexity import get_complexity_classifier
 from bot.client.prompt import generate_slot_question_prompt
 from helpers.log import get_logger
 from helpers.prettier import prettify_source
@@ -44,6 +51,8 @@ from .models import (
 from .session_manager import session_manager
 from .dependencies import (
     get_llm_client,
+    get_fast_llm_client,
+    get_reasoning_llm_client,
     get_vector_store,
     get_intent_router,
     get_ctx_synthesis_strategy,
@@ -53,6 +62,98 @@ from .dependencies import (
 )
 
 logger = get_logger(__name__)
+
+
+def generate_follow_up_actions(
+    intent: IntentType,
+    slots: Dict[str, Any],
+    query: str,
+    is_widget_query: bool = False
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate follow-up actions (quick actions and suggestions) based on intent and context.
+    
+    Args:
+        intent: Detected intent type
+        slots: Current slot values
+        query: User's query
+        is_widget_query: Whether this query was triggered from a widget card
+        
+    Returns:
+        Dictionary with quick_actions and suggestions, or None
+    """
+    quick_actions = []
+    suggestions = []
+    
+    query_lower = query.lower()
+    
+    # Generate actions based on intent
+    if intent == IntentType.BOOKING or intent == IntentType.AVAILABILITY:
+        # Booking/Availability intent
+        has_guests = slots.get("guests") is not None
+        has_dates = slots.get("dates") is not None
+        has_room_type = slots.get("room_type") is not None
+        
+        if not has_dates:
+            suggestions.append("I want to check availability for specific dates")
+        if not has_guests:
+            suggestions.append("I have 4 guests")
+        if not has_room_type:
+            suggestions.append("I want Cottage 9")
+        
+        quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
+        quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
+        
+        if not has_dates or not has_guests:
+            suggestions.append("What are the prices?")
+        suggestions.append("Tell me more about availability")
+        
+    elif intent == IntentType.PRICING:
+        # Pricing intent
+        quick_actions.append({"text": "Check Availability", "action": "availability", "type": "button"})
+        quick_actions.append({"text": "View Pricing", "action": "pricing", "type": "button"})
+        
+        suggestions.append("I want to book Cottage 9")
+        suggestions.append("What dates are available?")
+        suggestions.append("Tell me more about the cottages")
+        
+    elif "image" in query_lower or "photo" in query_lower or "picture" in query_lower:
+        # Image request
+        quick_actions.append({"text": "View More Images", "action": "images", "type": "button"})
+        quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
+        
+        suggestions.append("Show me Cottage 9 images")
+        suggestions.append("I want to book this cottage")
+        suggestions.append("What are the prices?")
+        
+    elif intent == IntentType.LOCATION:
+        # Location intent
+        quick_actions.append({"text": "Book Visit", "action": "booking", "type": "button"})
+        quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
+        
+        suggestions.append("I want to book for these dates")
+        suggestions.append("What are the prices?")
+        suggestions.append("Tell me more about nearby attractions")
+        
+    else:
+        # General FAQ - add booking-related suggestions
+        if is_widget_query:
+            quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
+            quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
+            
+            suggestions.append("I want to check availability")
+            suggestions.append("What are the prices?")
+            suggestions.append("Tell me more about booking")
+    
+    # If we have actions or suggestions, return them
+    if quick_actions or suggestions:
+        return {
+            "quick_actions": quick_actions,
+            "suggestions": suggestions
+        }
+    
+    return None
+
 
 # Load Dropbox image configuration
 def load_dropbox_config() -> Dict:
@@ -121,12 +222,16 @@ def get_dropbox_image_urls(cottage_number: str, max_images: int = 6) -> List[str
     config = get_dropbox_config()
     
     if not config.get("use_dropbox", False):
+        logger.debug(f"Dropbox not enabled in config for cottage {cottage_number}")
         return []
     
     cottage_urls = config.get("cottage_image_urls", {}).get(str(cottage_number), [])
     
     if not cottage_urls:
+        logger.warning(f"No Dropbox URLs configured for cottage {cottage_number} in dropbox_images.json")
         return []
+    
+    logger.info(f"Found {len(cottage_urls)} URLs in config for cottage {cottage_number}")
     
     # Process URLs - handle both folder links and direct image URLs
     all_urls = []
@@ -159,13 +264,17 @@ def get_dropbox_image_urls(cottage_number: str, max_images: int = 6) -> List[str
                 pass
             
             all_urls.append(direct_url)
+            logger.debug(f"Processed Dropbox URL for cottage {cottage_number}: {direct_url[:80]}...")
         else:
             # Assume it's already a direct image URL (from another CDN, etc.)
             all_urls.append(url)
+            logger.debug(f"Using direct image URL for cottage {cottage_number}: {url[:80]}...")
     
     if not all_urls:
         logger.warning(f"No valid Dropbox image URLs found for cottage {cottage_number}. "
                       f"Please provide direct image file URLs (not folder links) in dropbox_images.json")
+    else:
+        logger.info(f"Returning {len(all_urls[:max_images])} Dropbox URLs for cottage {cottage_number}")
     
     return all_urls[:max_images]
 
@@ -229,27 +338,138 @@ async def test_widget():
 
 
 # Helper functions from rag_chatbot_app.py
-def detect_image_request(query: str) -> tuple[bool, List[str]]:
-    """Detect if the query is asking for images/photos of cottages."""
+def detect_image_request(query: str, slot_manager=None, context_tracker=None) -> tuple[bool, List[str]]:
+    """
+    Detect if the query is asking for images/photos of cottages.
+    
+    Args:
+        query: User query string
+        slot_manager: Optional SlotManager instance to get current cottage from session
+        context_tracker: Optional ContextTracker instance to get current cottage from context
+    
+    Returns:
+        Tuple of (is_image_request, cottage_numbers)
+    """
     query_lower = query.lower()
     
-    image_keywords = [
-        "image", "images", "photo", "photos", "picture", "pictures",
-        "show me", "see", "view", "gallery", "visual", "look like",
-        "what does", "how does", "appearance", "interior", "exterior"
+    # Exclude non-image contexts that might contain similar keywords
+    exclusion_patterns = [
+        "availability", "available", "book", "booking", "price", "pricing",
+        "contact", "manager", "location", "nearby", "capacity", "guests"
     ]
     
-    is_image_request = any(keyword in query_lower for keyword in image_keywords)
+    # If query is about availability, booking, pricing, etc., it's NOT an image request
+    if any(pattern in query_lower for pattern in exclusion_patterns):
+        # Only proceed if query explicitly mentions images/photos/pictures
+        if not any(keyword in query_lower for keyword in ["image", "images", "photo", "photos", "picture", "pictures", "gallery"]):
+            return False, []
+    
+    # Primary image keywords (high confidence - explicit image requests)
+    primary_image_keywords = [
+        "image", "images", "photo", "photos", "picture", "pictures",
+        "gallery", "visual", "appearance", "interior", "exterior"
+    ]
+    
+    # Secondary keywords that require image context
+    secondary_image_keywords = ["show me", "see", "view"]
+    image_context_keywords = ["image", "images", "photo", "photos", "picture", "pictures", "gallery"]
+    
+    # Check for primary image keywords
+    is_image_request = any(keyword in query_lower for keyword in primary_image_keywords)
+    logger.debug(f"Image request detection - primary keywords check: {is_image_request} for query: {query}")
+    
+    # For secondary keywords, require image context
+    if not is_image_request:
+        has_secondary = any(keyword in query_lower for keyword in secondary_image_keywords)
+        if has_secondary:
+            # Must have image context keyword nearby
+            if any(context in query_lower for context in image_context_keywords):
+                is_image_request = True
+                logger.debug(f"Image request detected via secondary keywords with image context")
+    
+    # More specific patterns for image requests (not just "what" or "how")
+    image_patterns = [
+        r"what\s+does\s+(it|the\s+cottage|cottage\s+\d+)\s+look\s+like",
+        r"how\s+does\s+(it|the\s+cottage|cottage\s+\d+)\s+look",
+        r"what\s+(does|is)\s+(it|the\s+cottage|cottage\s+\d+)\s+(look|appear)",
+        r"show\s+(me\s+)?(images|photos|pictures)",
+        r"can\s+(you\s+)?(show|see|view)\s+(images|photos|pictures)",
+    ]
+    
+    # Check for specific image patterns (but exclude cooking/kitchen queries)
+    if not is_image_request:
+        import re
+        cooking_keywords = ["cook", "cooking", "kitchen", "chef", "food", "meal", "prepare", "make food"]
+        has_cooking_context = any(keyword in query_lower for keyword in cooking_keywords)
+        
+        if not has_cooking_context:
+            for pattern in image_patterns:
+                if re.search(pattern, query_lower):
+                    is_image_request = True
+                    break
     
     cottage_numbers = []
+    # First, try to extract from query directly
     for num in ["7", "9", "11"]:
         if f"cottage {num}" in query_lower or f"cottage{num}" in query_lower:
             cottage_numbers.append(num)
     
+    # If no cottage in query but image request, check session context
     if is_image_request and not cottage_numbers:
-        cottage_numbers = ["7", "9", "11"]
+        # Try to get from slot_manager (current cottage from conversation)
+        if slot_manager:
+            current_cottage = slot_manager.get_current_cottage()
+            if current_cottage:
+                cottage_numbers.append(current_cottage)
+                logger.debug(f"Using current_cottage from slot_manager: {current_cottage}")
+        
+        # Fallback to context_tracker
+        if not cottage_numbers and context_tracker:
+            current_cottage = context_tracker.get_current_cottage()
+            if current_cottage:
+                cottage_numbers.append(current_cottage)
+                logger.debug(f"Using current_cottage from context_tracker: {current_cottage}")
+        
+        # If still no cottage found, default to all cottages
+        if not cottage_numbers:
+            cottage_numbers = ["7", "9", "11"]
+            logger.debug("No cottage specified in query or session context, defaulting to all cottages")
     
     return is_image_request, cottage_numbers
+
+
+def extract_cottage_from_text(text: str) -> Optional[str]:
+    """Extract cottage number from text (answer or query)."""
+    text_lower = text.lower()
+    for num in ["7", "9", "11"]:
+        if f"cottage {num}" in text_lower or f"cottage{num}" in text_lower:
+            return num
+    return None
+
+
+def should_offer_images(query: str, answer: str) -> tuple[bool, Optional[str]]:
+    """
+    Determine if we should offer images based on query and answer.
+    
+    Returns:
+        (should_offer, cottage_number)
+    """
+    query_lower = query.lower()
+    answer_lower = answer.lower()
+    
+    # Check if user already asked for images
+    if any(keyword in query_lower for keyword in ["image", "images", "photo", "photos", "picture", "pictures", "show me", "see", "view"]):
+        return False, None
+    
+    # Check if answer mentions a specific cottage
+    cottage_num = extract_cottage_from_text(answer)
+    if cottage_num:
+        # Check if query was about a specific cottage
+        query_cottage = extract_cottage_from_text(query)
+        if query_cottage == cottage_num:
+            return True, cottage_num
+    
+    return False, None
 
 
 def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int = 6) -> List[Path]:
@@ -296,31 +516,67 @@ def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int =
 def validate_and_fix_currency(answer: str, context: str = "") -> str:
     """
     Validate that answer doesn't contain dollar prices when context has PKR prices.
-    If dollar prices are found, log a warning.
+    Also detect and fix incorrect lac/lakh conversions.
+    If dollar prices are found, convert them to PKR or remove them.
     """
     if not answer:
         return answer
     
+    converted_answer = answer
+    
     # Check if answer contains dollar prices
-    dollar_pattern = r'\$\d+'
-    has_dollar_prices = bool(re.search(dollar_pattern, answer))
+    dollar_pattern = r'\$(\d+(?:,\d+)?)'
+    dollar_matches = re.findall(dollar_pattern, answer)
     
-    # Check if context contains PKR prices
-    pkr_pattern = r'PKR\s*\d+[,\d]*'
-    context_has_pkr = bool(re.search(pkr_pattern, context)) if context else False
-    
-    if has_dollar_prices and context_has_pkr:
+    if dollar_matches:
         logger.error(
-            f"⚠️ CRITICAL: Answer contains dollar prices but context has PKR prices!\n"
-            f"Answer: {answer[:200]}...\n"
-            f"Context snippet: {context[:200]}..."
+            f"⚠️ CRITICAL: Answer contains dollar prices: {dollar_matches}\n"
+            f"Answer snippet: {answer[:200]}...\n"
         )
-        # Try to extract PKR prices from context and suggest replacement
-        pkr_matches = re.findall(pkr_pattern, context)
-        if pkr_matches:
-            logger.warning(f"Context contains PKR prices: {pkr_matches}. Answer should use these instead of dollar prices.")
+        
+        # Convert dollar prices to PKR (approximate conversion: $1 = PKR 300)
+        # This is a fallback - ideally the LLM shouldn't generate dollar prices
+        for dollar_amount_str in dollar_matches:
+            # Remove commas and convert to int
+            dollar_amount = int(dollar_amount_str.replace(",", ""))
+            # Convert to PKR (using approximate rate)
+            pkr_amount = dollar_amount * 300
+            # Replace $X with PKR X
+            dollar_str = f"${dollar_amount_str}"
+            pkr_str = f"PKR {pkr_amount:,}"
+            converted_answer = converted_answer.replace(dollar_str, pkr_str)
+            logger.warning(f"Converted {dollar_str} to {pkr_str} (approximate conversion)")
+        
+        # Also check for common dollar price patterns and replace
+        # Pattern: "$400 for a weekday" -> "PKR 120,000 for a weekday"
+        converted_answer = re.sub(
+            r'\$(\d+(?:,\d+)?)\s+(?:for|per)',
+            lambda m: f"PKR {int(m.group(1).replace(',', '')) * 300:,} ",
+            converted_answer
+        )
     
-    return answer
+    # Check for lac/lakh conversions (WRONG - should use exact PKR values)
+    # Patterns: "8-12 lac PKR", "8 lac PKR", "800,000-1,200,000 PKR", "approximately 8-12 lac"
+    lac_patterns = [
+        r'(\d+)\s*-\s*(\d+)\s*(?:lac|lakh)\s*PKR',
+        r'(\d+)\s*(?:lac|lakh)\s*PKR',
+        r'(\d{1,3}(?:,\d{3}){2,})\s*-\s*(\d{1,3}(?:,\d{3}){2,})\s*PKR',  # 800,000-1,200,000 PKR
+        r'approximately\s*(\d+)\s*-\s*(\d+)\s*(?:lac|lakh)',
+    ]
+    
+    for pattern in lac_patterns:
+        matches = re.finditer(pattern, converted_answer, re.IGNORECASE)
+        for match in matches:
+            logger.error(
+                f"⚠️ CRITICAL: Answer contains lac/lakh conversion: '{match.group(0)}'\n"
+                f"This is WRONG - should use exact PKR values from context (e.g., PKR 32,000, PKR 38,000)\n"
+                f"Answer snippet: {answer[max(0, match.start()-50):match.end()+50]}...\n"
+            )
+            # Try to extract context prices if available
+            # For now, just log the error - the prompt should prevent this, but this is a safety check
+            logger.warning(f"Lac/lakh conversion detected but cannot auto-fix without context prices. Prompt should prevent this.")
+    
+    return converted_answer
 
 
 def clean_answer_text(answer: str) -> str:
@@ -331,7 +587,57 @@ def clean_answer_text(answer: str) -> str:
     if not answer:
         return answer
     
-    # Remove common reasoning prefixes and process text
+    # First, remove large reasoning blocks that span multiple lines
+    # This catches the "We have the opportunity to refine..." pattern with all its content
+    large_reasoning_blocks = [
+        # Pattern for "We have the opportunity to refine..." through "The refined answer remains..."
+        # Matches: "We have the opportunity..." + separator + "answer: ..." + separator + "Since the original query..." + "The refined answer remains..."
+        r"We have the opportunity to refine.*?(?:[-=]{3,}.*?)?(?:answer:.*?)?(?:[-=]{3,}.*?)?(?:Since the original query.*?)?(?:The refined answer (?:remains|is).*?\.?)\s*",
+        # Pattern for "To refine the existing answer..." through end
+        r"To refine the existing answer.*?(?:[-=]{3,}.*?)?(?:answer:.*?)?(?:[-=]{3,}.*?)?(?:Since.*?)?(?:The refined answer.*?\.?)\s*",
+        # Pattern for "Based on the existing answer and the new context..." through end
+        r"Based on the existing answer and the new context.*?(?:[-=]{3,}.*?)?(?:answer:.*?)?(?:[-=]{3,}.*?)?(?:Since.*?)?(?:The refined answer.*?\.?)\s*",
+        # Pattern for "Based on the context information provided above..." through end
+        r"Based on the context information provided above.*?(?:[-=]{3,}.*?)?(?:answer:.*?)?(?:[-=]{3,}.*?)?(?:The refined answer (?:remains|is).*?\.?)\s*",
+        # Pattern for "Considering..." through end
+        r"Considering.*?the refined answer.*?(?:[-=]{3,}.*?)?(?:answer:.*?)?(?:[-=]{3,}.*?)?(?:Since.*?)?(?:The refined answer.*?\.?)\s*",
+        # Pattern for "Since the original query is as follows:" through "The refined answer remains..."
+        r"Since the original query is as follows:.*?The refined answer (?:remains|is).*?\.?\s*",
+        # Pattern for separator lines with "answer:" in between (catches standalone answer blocks)
+        r"[-=]{3,}\s*answer:\s*.*?[-=]{3,}\s*",
+        # Pattern for "The refined answer remains the same" or similar endings
+        r"The refined answer (?:remains the same|is the same|remains unchanged).*?\.?\s*",
+    ]
+    
+    cleaned = answer
+    
+    # First, try to extract the actual answer from reasoning blocks
+    # Pattern: "We have the opportunity... answer: [ACTUAL ANSWER] ... Since the original query..."
+    # Extract just the answer part
+    answer_extraction_patterns = [
+        # Pattern 1: Full block with separators
+        r"We have the opportunity to refine.*?[-=]{3,}\s*answer:\s*(.*?)\s*[-=]{3,}.*?Since the original query.*?The refined answer.*?\.?\s*",
+        # Pattern 2: Without "Since the original query" part
+        r"We have the opportunity to refine.*?[-=]{3,}\s*answer:\s*(.*?)\s*[-=]{3,}.*?The refined answer.*?\.?\s*",
+        # Pattern 3: More flexible - any "answer:" in reasoning block
+        r"(?:We have the opportunity|To refine|Based on the existing answer).*?answer:\s*(.*?)(?:[-=]{3,}.*?)?(?:Since.*?)?(?:The refined answer.*?\.?)\s*",
+    ]
+    
+    for pattern in answer_extraction_patterns:
+        match = re.search(pattern, cleaned, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            # Replace the entire reasoning block with just the extracted answer
+            actual_answer = match.group(1).strip()
+            # Only replace if we found a meaningful answer (not empty, not just reasoning text)
+            if actual_answer and len(actual_answer) > 10 and not re.match(r"^(yes|no|the|a|an)\s*$", actual_answer, re.IGNORECASE):
+                cleaned = re.sub(pattern, actual_answer + "\n", cleaned, flags=re.IGNORECASE | re.DOTALL)
+                break  # Only use the first successful match
+    
+    # Then remove remaining large reasoning blocks
+    for pattern in large_reasoning_blocks:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    
+    # Remove common reasoning prefixes and process text (single line patterns)
     reasoning_patterns = [
         r"^.*?Let me (think|check|analyze|search|find|look|reason|consider).*?\n",
         r"^.*?I (need|should|will|can|must) (think|check|analyze|search|find|look|reason|consider).*?\n",
@@ -360,11 +666,180 @@ def clean_answer_text(answer: str) -> str:
         r"We have the opportunity to refine.*?\.\s*",
         r"To refine the existing answer.*?\.\s*",
         r"Considering.*?the refined answer.*?\.\s*",
+        # Specific patterns from user examples
+        r"Based on the context information provided above.*?\.\s*",
+        r"Based on the context information provided above.*?:\s*",
+        r"We have the opportunity to refine the existing answer with.*?\.\s*",
+        r"We have the opportunity to refine the existing answer with.*?:\s*",
+        r"The refined answer is:?\s*",
+        r"The refined answer remains:?\s*",
+        r"Based on the context information provided above, the refined answer is:?\s*",
+        r"Based on the context information provided above, the refined answer remains:?\s*",
     ]
     
-    cleaned = answer
     for pattern in reasoning_patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Remove structured pricing analysis templates (internal instructions that shouldn't be shown to users)
+    # This is CRITICAL - the entire template must be removed before showing to users
+    
+    # Quick check: If answer starts with template markers, find where actual answer begins
+    # Enhanced to catch capacity templates too
+    if cleaned.strip().startswith('🚨') or '🚨 CRITICAL PRICING INFORMATION' in cleaned or 'CRITICAL CAPACITY INFORMATION' in cleaned:
+        # Find the first line that contains actual pricing answer (not template instructions)
+        lines = cleaned.split('\n')
+        answer_start_idx = None
+        
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            line_upper = line_stripped.upper()
+            
+            # Skip template lines (enhanced to catch capacity templates too)
+            if any(keyword in line_upper for keyword in [
+                'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'STRUCTURED PRICING',
+                'DO NOT CONVERT', 'YOU MUST USE', 'ALL PRICES ARE IN PKR',
+                'DETAILED BREAKDOWN', 'CHECK-IN:', 'CHECK-OUT:', 'GUESTS:',
+                'WEEKDAY RATE:', 'WEEKEND RATE:', 'TOTAL NIGHTS:',
+                'STRUCTURED CAPACITY ANALYSIS', 'DIRECT ANSWER (USE THIS EXACTLY)',
+                'CRITICAL CAPACITY INFORMATION', 'YOU MUST INCLUDE'
+            ]) or line_stripped.startswith(('🚨', '⚠️', '🎯')) or re.match(r'^\d+\.\s+(You MUST|DO NOT|THE TOTAL COST)', line_stripped):
+                continue
+            
+            # Look for actual answer content (enhanced to catch capacity answers too)
+            if len(line_stripped) > 15 and (
+                'PKR' in line_stripped and any(word in line_stripped.lower() for word in ['cost', 'total', 'nights', 'night'])
+                or re.search(r'for \d+ nights?', line_stripped, re.IGNORECASE)
+                or re.search(r'total cost.*?PKR', line_stripped, re.IGNORECASE)
+                or re.search(r'cottage \d+', line_stripped, re.IGNORECASE)
+                or re.search(r'up to \d+ guests?', line_stripped, re.IGNORECASE)
+                or re.search(r'capacity.*?\d+', line_stripped, re.IGNORECASE)
+            ):
+                answer_start_idx = i
+                break
+        
+        if answer_start_idx is not None:
+            cleaned = '\n'.join(lines[answer_start_idx:]).strip()
+        else:
+            # Fallback: remove everything up to first meaningful content (enhanced for capacity)
+            cleaned = '\n'.join([l for l in lines if l.strip() and not any(
+                keyword in l.upper() for keyword in [
+                    'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'STRUCTURED PRICING',
+                    'DO NOT CONVERT', 'YOU MUST USE', 'ALL PRICES ARE IN PKR',
+                    'CRITICAL CAPACITY', 'STRUCTURED CAPACITY', 'DIRECT ANSWER (USE THIS EXACTLY)'
+                ]
+            ) and not l.strip().startswith(('🚨', '⚠️', '🎯'))]).strip()
+    
+    # First, try to find where the actual answer starts (after the template)
+    # Look for patterns that indicate the template has ended and real answer begins
+    answer_start_markers = [
+        r"For \d+ nights?",
+        r"The total cost",
+        r"Total cost",
+        r"For cottage",
+        r"Cottage \d+",
+        r"PKR \d+",
+        r"pricing for",
+        r"cost is",
+    ]
+    
+    # Split into lines for more precise filtering
+    lines = cleaned.split('\n')
+    filtered_lines = []
+    in_template = False
+    template_ended = False
+    
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        line_upper = line_stripped.upper()
+        
+        # Detect start of template (enhanced to catch capacity templates)
+        if not template_ended and (
+            line_stripped.startswith('🚨') and ('CRITICAL PRICING' in line_upper or 'CRITICAL CAPACITY' in line_upper)
+            or line_stripped.startswith('⚠️') and 'MANDATORY INSTRUCTIONS' in line_upper
+            or 'STRUCTURED PRICING ANALYSIS' in line_upper
+            or 'STRUCTURED CAPACITY ANALYSIS' in line_upper
+            or 'ALL PRICES ARE IN PKR' in line_upper and 'DO NOT USE DOLLAR' in line_upper
+            or 'CRITICAL CAPACITY INFORMATION' in line_upper
+        ):
+            in_template = True
+            continue
+        
+        # Detect template content lines (enhanced to catch capacity templates)
+        if in_template and (
+            line_stripped.startswith(('🚨', '⚠️', '🎯'))
+            or 'CRITICAL PRICING' in line_upper
+            or 'CRITICAL CAPACITY' in line_upper
+            or 'MANDATORY INSTRUCTIONS FOR LLM' in line_upper
+            or 'STRUCTURED PRICING ANALYSIS' in line_upper
+            or 'STRUCTURED CAPACITY ANALYSIS' in line_upper
+            or 'DO NOT CONVERT TO DOLLARS' in line_upper
+            or 'DO NOT USE DOLLAR PRICES' in line_upper
+            or 'YOU MUST USE ONLY' in line_upper
+            or 'THE TOTAL COST IS PKR' in line_upper and 'YOU MUST INCLUDE' in line_upper
+            or 'Your answer MUST include' in line_upper
+            or 'YOU MUST include' in line_upper
+            or 'DIRECT ANSWER (USE THIS EXACTLY)' in line_upper
+            or line_stripped.startswith('- Guests:')
+            or line_stripped.startswith('- Check-in:')
+            or line_stripped.startswith('- Check-out:')
+            or line_stripped.startswith('- Total Nights:')
+            or line_stripped.startswith('- Weekday Rate:')
+            or line_stripped.startswith('- Weekend Rate:')
+            or line_stripped.startswith('- Base capacity:')
+            or line_stripped.startswith('- Maximum capacity:')
+            or line_stripped.startswith('- Bedrooms:')
+            or 'DETAILED BREAKDOWN' in line_upper
+            or re.match(r'^\d+\.\s+You MUST', line_stripped)
+            or re.match(r'^\d+\.\s+DO NOT', line_stripped)
+            or re.match(r'^\d+\.\s+THE TOTAL COST', line_stripped)
+        ):
+            continue
+        
+        # Check if we've reached the end of template (empty line or actual answer content)
+        if in_template:
+            # If we hit an empty line or find answer-like content, template has ended
+            if not line_stripped:
+                # Check next few lines to see if answer starts
+                next_lines = [l.strip() for l in lines[i+1:i+4] if l.strip()]
+                if any(re.search(marker, ' '.join(next_lines), re.IGNORECASE) for marker in answer_start_markers):
+                    template_ended = True
+                    in_template = False
+                    # Include this line and continue
+                else:
+                    continue
+            elif any(re.search(marker, line_stripped, re.IGNORECASE) for marker in answer_start_markers):
+                # Found actual answer content
+                template_ended = True
+                in_template = False
+                filtered_lines.append(line)
+            else:
+                # Still in template, skip
+                continue
+        else:
+            # Not in template, include the line
+            filtered_lines.append(line)
+    
+    cleaned = '\n'.join(filtered_lines)
+    
+    # Also use regex as fallback to catch any remaining template fragments
+    # Enhanced to catch ALL internal instruction patterns including capacity templates
+    pricing_template_patterns = [
+        r"🚨\s*CRITICAL PRICING INFORMATION.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?(?=\n\n|\Z)",
+        r"STRUCTURED PRICING ANALYSIS FOR COTTAGE.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?(?=\n\n|\Z)",
+        r"ALL PRICES ARE IN PKR.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?(?=\n\n|\Z)",
+        r"⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?(?=\n\n|\Z)",
+        r"You MUST use ONLY these PKR prices.*?(?=\n\n|\Z)",
+        r"DO NOT convert to dollars.*?(?=\n\n|\Z)",
+        r"Your answer MUST include.*?Total cost.*?(?=\n\n|\Z)",
+        r"🎯\s*TOTAL COST FOR.*?🎯\s*",
+        # Capacity analysis templates
+        r"STRUCTURED CAPACITY ANALYSIS.*?DIRECT ANSWER.*?(?=\n\n|\Z)",
+        r"CRITICAL CAPACITY INFORMATION.*?YOU MUST include.*?(?=\n\n|\Z)",
+        r"CRITICAL CAPACITY INFORMATION FOR COTTAGE.*?YOU MUST include.*?(?=\n\n|\Z)",
+    ]
+    
+    for pattern in pricing_template_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
     
     # Remove markdown code blocks that might contain reasoning
     cleaned = re.sub(r"```.*?```", "", cleaned, flags=re.DOTALL)
@@ -385,14 +860,26 @@ def clean_answer_text(answer: str) -> str:
             "to answer", "to find", "to check", "to determine", "to understand",
             "the new context is", "since the original", "however, there seems",
             "to refine the existing", "we have the opportunity", "considering the",
+            "since the original query", "the refined answer remains", "the refined answer is",
+            "refined answer remains", "refined answer is", "answer remains the same",
+            "based on the context information provided above", "we have the opportunity to refine",
+            "based on the context information", "the context information provided above",
         ]
         
-        if any(indicator in line_lower for indicator in reasoning_indicators) and len(line) < 200:
+        # Check if line contains reasoning indicators
+        is_reasoning_line = any(indicator in line_lower for indicator in reasoning_indicators)
+        
+        # Also check for lines that are just "answer:" followed by content (reasoning pattern)
+        if re.match(r"^\s*answer:\s*", line_lower) and len(line) < 300:
+            is_reasoning_line = True
+        
+        # Skip lines that are clearly reasoning
+        if is_reasoning_line and len(line) < 300:
             skip_next = True
             continue
         
-        # Skip separator lines after reasoning
-        if skip_next and (line.strip() in ["---", "===", "***", "###", ""]):
+        # Skip separator lines after reasoning (dashes, equals, etc.)
+        if skip_next and (re.match(r"^[-=*#]{3,}\s*$", line.strip()) or line.strip() == ""):
             continue
         
         skip_next = False
@@ -400,11 +887,163 @@ def clean_answer_text(answer: str) -> str:
     
     cleaned = '\n'.join(filtered_lines)
     
+    # Remove reasoning text that appears at the start of the answer
+    # This catches patterns like "Based on the context information provided above, the refined answer is: [answer]"
+    start_reasoning_patterns = [
+        r"^(?:We have the opportunity to refine|Based on the context information provided above|Based on the provided context|Given the context|Since the original query).*?:\s*",
+        r"^(?:The refined answer is|The refined answer remains|Refined Answer|Answer):\s*",
+    ]
+    
+    for pattern in start_reasoning_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
+    
     # Remove extra whitespace
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = cleaned.strip()
     
     return cleaned
+
+
+def inject_essential_info(
+    retrieved_contents: List["Document"],
+    query: str,
+    slots: Dict
+) -> List["Document"]:
+    """
+    Inject essential information based on query type.
+    - For cottage description queries: inject capacity information
+    - For safety queries: prioritize safety documents (handled separately)
+    - For availability queries: use availability handler (handled separately)
+    
+    Args:
+        retrieved_contents: List of retrieved documents
+        query: User query
+        slots: Extracted slots from query
+        
+    Returns:
+        List of documents with essential info injected
+    """
+    import re
+    from bot.conversation.cottage_capacity import get_capacity_mapper
+    from entities.document import Document
+    
+    query_lower = query.lower()
+    enhanced_contents = retrieved_contents.copy()
+    
+    # For cottage description queries, inject capacity info
+    cottage_match = re.search(r'cottage\s*(\d+)', query_lower)
+    if cottage_match and any(phrase in query_lower for phrase in [
+        'tell me about', 'what is', 'describe', 'about cottage', 'tell me'
+    ]):
+        cottage_num = cottage_match.group(1)
+        try:
+            capacity_mapper = get_capacity_mapper()
+            capacity_info = capacity_mapper.get_capacity(cottage_num)
+            
+            if capacity_info:
+                capacity_doc = Document(
+                    page_content=f"CRITICAL CAPACITY INFORMATION FOR COTTAGE {cottage_num}:\n"
+                               f"Base capacity: Up to {capacity_info['base_capacity']} guests\n"
+                               f"Maximum capacity: Up to {capacity_info['max_capacity']} guests (with prior confirmation)\n"
+                               f"Bedrooms: {capacity_info['bedrooms']}\n\n"
+                               f"YOU MUST include this capacity information in your answer about Cottage {cottage_num}.",
+                    metadata={"source": "capacity_injection", "cottage": cottage_num}
+                )
+                enhanced_contents.insert(0, capacity_doc)
+                logger.info(f"Injected capacity info for Cottage {cottage_num}")
+        except Exception as e:
+            logger.warning(f"Failed to inject capacity info for Cottage {cottage_num}: {e}")
+    
+    return enhanced_contents
+
+
+def should_filter_pricing(query: str) -> bool:
+    """
+    Check if pricing should be filtered from context - UNIVERSAL CHECK.
+    
+    Args:
+        query: User query
+        
+    Returns:
+        True if pricing should be filtered (query does NOT ask about pricing)
+    """
+    query_lower = query.lower()
+    pricing_keywords = ["price", "pricing", "cost", "rate", "rates", "how much", "pkr", "per night", "weekday", "weekend", "total cost", "booking cost"]
+    
+    # If query does NOT ask about pricing, filter pricing from context
+    asks_about_pricing = any(kw in query_lower for kw in pricing_keywords)
+    
+    return not asks_about_pricing  # Filter pricing for ALL non-pricing queries
+
+
+def filter_pricing_from_context(documents: List["Document"], query: str) -> List["Document"]:
+    """
+    Filter out or deprioritize pricing-related documents if query doesn't ask about pricing.
+    
+    Args:
+        documents: List of retrieved documents
+        query: User query
+        
+    Returns:
+        List of documents with pricing docs deprioritized (non-pricing docs first)
+    """
+    if not should_filter_pricing(query):
+        return documents
+    
+    # Separate pricing vs non-pricing documents
+    pricing_docs = []
+    non_pricing_docs = []
+    pricing_indicators = ["pricing", "price", "pkr", "cost", "rate", "per night", "weekday", "weekend", "total cost"]
+    
+    for doc in documents:
+        content_lower = doc.page_content.lower()
+        # Check if document is primarily about pricing
+        # Keep availability handler docs even if they mention pricing
+        is_availability_handler = doc.metadata.get("source") == "availability_handler"
+        is_capacity_injection = doc.metadata.get("source") == "capacity_injection"
+        is_pricing_doc = any(indicator in content_lower for indicator in pricing_indicators) and \
+                        ("cottage" in content_lower or "accommodation" in content_lower or "stay" in content_lower) and \
+                        not any(kw in content_lower for kw in ["available", "availability", "safety", "security", "guard", "gated"]) and \
+                        not is_availability_handler and not is_capacity_injection
+        
+        if is_pricing_doc:
+            pricing_docs.append(doc)  # Keep but deprioritize
+        else:
+            non_pricing_docs.append(doc)  # Keep with priority
+    
+    # Return non-pricing docs first, then pricing docs (deprioritized)
+    return non_pricing_docs + pricing_docs if non_pricing_docs else documents
+
+
+def prioritize_safety_documents(documents: List["Document"], query: str) -> List["Document"]:
+    """
+    Prioritize safety-related documents for safety queries.
+    
+    Args:
+        documents: List of retrieved documents
+        query: User query
+        
+    Returns:
+        List of documents with safety docs first
+    """
+    query_lower = query.lower()
+    safety_keywords = ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"]
+    
+    if not any(kw in query_lower for kw in safety_keywords):
+        return documents
+    
+    safety_docs = []
+    other_docs = []
+    safety_indicators = ["guard", "guards", "security", "gated community", "secure", "safety", "emergency"]
+    
+    for doc in documents:
+        content_lower = doc.page_content.lower()
+        if any(indicator in content_lower for indicator in safety_indicators):
+            safety_docs.append(doc)
+        else:
+            other_docs.append(doc)
+    
+    return safety_docs + other_docs if safety_docs else documents
 
 
 def is_answer_relevant(answer: str, query: str) -> bool:
@@ -550,33 +1189,97 @@ def is_direct_booking_request(query: str) -> bool:
 
 
 def prioritize_cottage_documents(query: str, documents: list) -> list:
-    """Re-order documents to prioritize those mentioning the specific cottage number asked about."""
+    """
+    Re-order documents to prioritize those mentioning the specific cottage number asked about.
+    Also filters out Cottage 7 from general queries (unless specifically asked).
+    When a specific cottage is mentioned, FILTER OUT documents about other cottages.
+    """
     query_lower = query.lower()
     
+    # Check if Cottage 7 is specifically mentioned or if it's a 2-bedroom query
+    cottage_7_allowed = (
+        "cottage 7" in query_lower or 
+        "cottage7" in query_lower or
+        "2 bedroom" in query_lower or 
+        "two bedroom" in query_lower
+    )
+    
+    # Extract cottage numbers mentioned in query
     cottage_numbers = []
     for num in ["7", "9", "11"]:
         if f"cottage {num}" in query_lower or f"cottage{num}" in query_lower:
             cottage_numbers.append(num)
     
-    if not cottage_numbers:
-        return documents
-    
-    prioritized = []
-    others = []
-    
-    for doc in documents:
-        doc_text_lower = doc.page_content.lower()
-        mentions_specific_cottage = any(
-            f"cottage {num}" in doc_text_lower or f"cottage{num}" in doc_text_lower
-            for num in cottage_numbers
-        )
+    # If specific cottages mentioned, prioritize those and FILTER OUT others
+    if cottage_numbers:
+        prioritized = []
+        filtered_out = []
         
-        if mentions_specific_cottage:
-            prioritized.append(doc)
-        else:
-            others.append(doc)
+        for doc in documents:
+            doc_text_lower = doc.page_content.lower()
+            # Check if document mentions the specific cottage(s) asked about
+            mentions_specific_cottage = any(
+                f"cottage {num}" in doc_text_lower or f"cottage{num}" in doc_text_lower
+                for num in cottage_numbers
+            )
+            
+            # Check if document mentions OTHER cottages (not the one asked about)
+            mentions_other_cottage = False
+            for num in ["7", "9", "11"]:
+                if num not in cottage_numbers:  # This is a different cottage
+                    if f"cottage {num}" in doc_text_lower or f"cottage{num}" in doc_text_lower:
+                        mentions_other_cottage = True
+                        break
+            
+            if mentions_specific_cottage:
+                prioritized.append(doc)
+            elif mentions_other_cottage:
+                # Filter out documents about other cottages when specific cottage is asked
+                filtered_out.append(doc)
+                logger.debug(f"Filtered out document mentioning different cottage (query: {cottage_numbers}, doc mentions other cottage)")
+            else:
+                # Document doesn't mention any specific cottage - keep it (might be general info)
+                prioritized.append(doc)
+        
+        logger.info(f"Prioritized {len(prioritized)} documents for cottage(s) {cottage_numbers}, filtered out {len(filtered_out)} documents about other cottages")
+        return prioritized
     
-    return prioritized + others
+    # For general queries (no specific cottage mentioned):
+    # Filter out Cottage 7 documents unless it's a 2-bedroom query
+    if not cottage_7_allowed:
+        filtered_docs = []
+        filtered_count = 0
+        for doc in documents:
+            doc_text_lower = doc.page_content.lower()
+            # Check if document mentions ONLY Cottage 7 (not 9 or 11)
+            mentions_cottage_7 = (
+                "cottage 7" in doc_text_lower or 
+                "cottage7" in doc_text_lower
+            )
+            mentions_cottage_9_or_11 = (
+                "cottage 9" in doc_text_lower or 
+                "cottage9" in doc_text_lower or
+                "cottage 11" in doc_text_lower or 
+                "cottage11" in doc_text_lower
+            )
+            
+            # Include document if:
+            # - It doesn't mention Cottage 7, OR
+            # - It mentions Cottage 7 BUT also mentions 9 or 11 (general info)
+            if not mentions_cottage_7 or mentions_cottage_9_or_11:
+                filtered_docs.append(doc)
+            else:
+                # Document mentions ONLY Cottage 7 - exclude it from general queries
+                filtered_count += 1
+                logger.info(f"Filtered out Cottage 7-only document from general query: {doc.metadata.get('source', 'unknown')}")
+        
+        if filtered_count > 0:
+            logger.info(f"Filtered out {filtered_count} Cottage 7-only document(s) from general query. Remaining: {len(filtered_docs)} documents")
+        
+        return filtered_docs
+    
+    # Cottage 7 is allowed (2-bedroom query or specifically asked)
+    return documents
 
 
 # API Endpoints
@@ -621,6 +1324,280 @@ async def chat(
 ):
     """Main chat endpoint."""
     try:
+        # Detect if this is a widget-triggered query
+        widget_query_patterns = [
+            "I want to check availability and book a cottage for my dates",
+            "Show me images and photos of the cottages",
+            "What are the prices and cottage options? Compare weekday and weekend rates",
+            "Tell me about the location and nearby attractions near Swiss Cottages Bhurban"
+        ]
+        is_widget_query = any(pattern.lower() in request.question.lower() for pattern in widget_query_patterns)
+        
+        # Get slot manager and context tracker early for image detection
+        slot_manager = session_manager.get_or_create_slot_manager(request.session_id, llm)
+        context_tracker = session_manager.get_or_create_context_tracker(request.session_id)
+        
+        # Pre-processing: Check for "yes" responses to image offers
+        query_lower = request.question.lower()
+        is_yes_response = any(word in query_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay", "show me", "show images", "show photos"])
+        
+        # Check if previous message offered images (stored in session)
+        if is_yes_response:
+            session_data = session_manager.get_session_data(request.session_id)
+            if session_data and session_data.get("image_offer_cottage"):
+                cottage_num = session_data.get("image_offer_cottage")
+                # User said yes to image offer - show images
+                is_image_request = True
+                cottage_numbers = [cottage_num]
+                # Clear the offer from session
+                session_data.pop("image_offer_cottage", None)
+            else:
+                is_image_request, cottage_numbers = detect_image_request(request.question, slot_manager, context_tracker)
+        else:
+            is_image_request, cottage_numbers = detect_image_request(request.question, slot_manager, context_tracker)
+        
+        # Pre-processing: Handle explicit image requests early
+        if is_image_request and cottage_numbers:
+            logger.info(f"Detected explicit image request for cottages: {cottage_numbers}")
+            # Get images directly without going through full RAG
+            root_folder = get_root_folder()
+            dropbox_config = get_dropbox_config()
+            use_dropbox = dropbox_config.get("use_dropbox", False)
+            logger.info(f"Dropbox config - use_dropbox: {use_dropbox}, available cottages: {list(dropbox_config.get('cottage_image_urls', {}).keys())}")
+            
+            # Group images by cottage
+            cottage_images_dict = {}
+            
+            for cottage_num in cottage_numbers:
+                cottage_images = []
+                
+                if use_dropbox:
+                    logger.info(f"Attempting to get Dropbox URLs for cottage {cottage_num}")
+                    dropbox_urls = get_dropbox_image_urls(cottage_num, max_images=6)
+                    logger.info(f"Got {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num}")
+                    if dropbox_urls:
+                        cottage_images.extend(dropbox_urls)
+                        logger.info(f"Using {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num}")
+                    else:
+                        logger.warning(f"No Dropbox URLs found for cottage {cottage_num}, falling back to local files")
+                        # Fallback to local files
+                        images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                        for img_path in images:
+                            rel_path = img_path.relative_to(root_folder)
+                            from urllib.parse import quote
+                            encoded_path = str(rel_path).replace('\\', '/')
+                            url_path = '/'.join(quote(part, safe='') for part in encoded_path.split('/'))
+                            image_url = f"/images/{url_path}"
+                            cottage_images.append(image_url)
+                else:
+                    logger.info(f"Dropbox not enabled, using local files for cottage {cottage_num}")
+                    images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                    for img_path in images:
+                        rel_path = img_path.relative_to(root_folder)
+                        from urllib.parse import quote
+                        encoded_path = str(rel_path).replace('\\', '/')
+                        url_path = '/'.join(quote(part, safe='') for part in encoded_path.split('/'))
+                        image_url = f"/images/{url_path}"
+                        cottage_images.append(image_url)
+                
+                if cottage_images:
+                    cottage_images_dict[cottage_num] = cottage_images
+            
+            if cottage_images_dict:
+                # Generate a brief response
+                if len(cottage_numbers) == 1:
+                    answer = f"Here are images of Cottage {cottage_numbers[0]}:"
+                else:
+                    answer = f"Here are images of the cottages:"
+                
+                total_images = sum(len(imgs) for imgs in cottage_images_dict.values())
+                logger.info(f"Returning {total_images} image URLs grouped by cottage: {list(cottage_images_dict.keys())}")
+                
+                # Return as dictionary grouped by cottage
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent="images",
+                    session_id=request.session_id,
+                    cottage_images=cottage_images_dict,  # Now a dict: {"7": [urls], "9": [urls], "11": [urls]}
+                )
+            else:
+                # No images found, provide helpful message
+                answer = "I'm sorry, I couldn't find images for the requested cottages. Please contact us for more information."
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent="images",
+                    session_id=request.session_id,
+                )
+        
+        # Pre-processing: Check for manager contact queries
+        manager_contact_patterns = [
+            "how can i contact the manager", "contact the manager", "contact manager",
+            "manager contact", "manager's contact", "manager contact details",
+            "manager phone", "manager number", "cottage manager", "who is the manager",
+            "manager information", "reach the manager", "speak to manager"
+        ]
+        if any(pattern in query_lower for pattern in manager_contact_patterns):
+            answer = (
+                "**Cottage Manager Contact Information** 📞\n\n"
+                "**Abdullah** is the cottage manager at Swiss Cottages Bhurban.\n\n"
+                "**Contact Details:**\n"
+                "- **Phone:** +92 300 1218563\n"
+                "- **Alternate Phone (Urgent):** +92 327 8837088\n"
+                "- **Contact Form:** https://swisscottagesbhurban.com/contact-us/\n\n"
+                "Abdullah can help you with:\n"
+                "- Bookings and availability\n"
+                "- Pricing and special requests\n"
+                "- General assistance before or during your stay\n\n"
+                "Feel free to reach out for personalized assistance! 🏡"
+            )
+            return ChatResponse(
+                answer=answer,
+                sources=[],
+                intent="contact_manager",
+                session_id=request.session_id,
+            )
+        
+        # Pre-processing: Check for single room/person queries
+        single_room_patterns = [
+            "single room", "one room", "individual room", "separate room",
+            "single person", "one person", "individual person", "solo",
+            "just me", "only me", "by myself", "alone"
+        ]
+        if any(pattern in query_lower for pattern in single_room_patterns):
+            answer = (
+                "Swiss Cottages Bhurban rents **entire cottages**, not individual rooms. 🏡\n\n"
+                "Each cottage is a fully private, self-contained unit that includes:\n"
+                "- Multiple bedrooms (2-3 bedrooms depending on cottage)\n"
+                "- Living areas\n"
+                "- Kitchen\n"
+                "- Terrace/balcony\n"
+                "- Parking\n\n"
+                "**Important:** Even if you're traveling alone or as a single person, you would rent the entire cottage. "
+                "The base pricing is for up to 6 guests, so a single person would still rent the full cottage.\n\n"
+                "Would you like to know more about:\n"
+                "- Pricing for a single person stay\n"
+                "- Which cottage would be best for you\n"
+                "- Availability and booking information"
+            )
+            return ChatResponse(
+                answer=answer,
+                sources=[],
+                intent="faq_question",
+                session_id=request.session_id,
+            )
+        
+        # Pre-processing: Check for cottage listing queries
+        # IMPORTANT: This must run BEFORE general "tell me about" handler
+        
+        # Check for "how many cottages" or "total cottages" queries FIRST
+        total_cottages_patterns = [
+            "how many cottages", "total cottages", "number of cottages",
+            "how many cottages do you have", "total number of cottages"
+        ]
+        
+        if any(pattern in query_lower for pattern in total_cottages_patterns):
+            registry = get_cottage_registry()
+            answer = registry.format_total_cottages_response()
+            return ChatResponse(
+                answer=answer,
+                sources=[],
+                intent="cottage_listing",
+                session_id=request.session_id,
+            )
+        
+        # Flexible cottage listing detection using keyword combination
+        # Check if query contains "cottages" + listing keywords
+        has_cottages_keyword = "cottage" in query_lower or "cottages" in query_lower
+        listing_keywords = [
+            "you have", "do you have", "available", "offer", "list", 
+            "which", "what", "show me", "tell me about the cottages"
+        ]
+        has_listing_intent = any(keyword in query_lower for keyword in listing_keywords)
+        
+        # Also check for explicit listing patterns
+        explicit_listing_patterns = [
+            "which cottages", "what cottages", "list cottages", 
+            "cottages do you have", "cottages you have",
+            "available cottages", "cottages available",
+            "what cottages do you", "which cottages do you"
+        ]
+        has_explicit_pattern = any(pattern in query_lower for pattern in explicit_listing_patterns)
+        
+        # If query is about listing cottages (not general info about swiss cottages)
+        if has_cottages_keyword and (has_listing_intent or has_explicit_pattern):
+            # Additional check: exclude general "tell me about swiss cottages" queries
+            # These should go to RAG for general information
+            is_general_info_query = (
+                "tell me about swiss cottages" in query_lower or
+                "tell me about the swiss cottages" in query_lower or
+                ("tell me about" in query_lower and "cottages" in query_lower and 
+                 "you have" not in query_lower and "available" not in query_lower and
+                 "which" not in query_lower and "what" not in query_lower)
+            )
+            
+            if not is_general_info_query:
+                registry = get_cottage_registry()
+                # This will automatically filter to show only 9 and 11 (not 7)
+                answer = registry.format_cottage_list(query=request.question, show_total=False)
+                answer += (
+                    "\n\nAll cottages include:\n"
+                    "- Fully equipped kitchen\n"
+                    "- Living lounge\n"
+                    "- Bedrooms and bathrooms\n"
+                    "- Outdoor terrace/balcony\n"
+                    "- Wi-Fi, smart TV with Netflix\n"
+                    "- Heating system\n"
+                    "- Secure parking\n\n"
+                    "Would you like to know more about:\n"
+                    "- Pricing for a specific cottage\n"
+                    "- Which cottage is best for your group size\n"
+                    "- Availability and booking information"
+                )
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent="cottage_listing",
+                    session_id=request.session_id,
+                )
+        
+        # Handle 2-bedroom queries (will show Cottage 7)
+        if "2 bedroom" in query_lower or "two bedroom" in query_lower:
+            registry = get_cottage_registry()
+            cottages = registry.list_cottages_by_filter(query=request.question)
+            if cottages:
+                answer = f"🏡 **2-Bedroom Cottages:**\n\n"
+                for cottage in cottages:
+                    answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
+                    answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
+                    answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
+                answer += "Would you like to know about pricing or availability?"
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent="cottage_listing",
+                    session_id=request.session_id,
+                )
+        
+        # Handle 3-bedroom queries (will show Cottages 9 and 11)
+        if "3 bedroom" in query_lower or "three bedroom" in query_lower:
+            registry = get_cottage_registry()
+            cottages = registry.list_cottages_by_filter(query=request.question)
+            if cottages:
+                answer = f"🏡 **3-Bedroom Cottages:**\n\n"
+                for cottage in cottages:
+                    answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
+                    answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
+                    answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
+                answer += "Would you like to know about pricing or availability?"
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent="cottage_listing",
+                    session_id=request.session_id,
+                )
+        
         # Get or create chat history (same as Streamlit - total_length=2)
         chat_history = session_manager.get_or_create_session(request.session_id, total_length=2)
         
@@ -631,6 +1608,21 @@ async def chat(
         # Classify intent
         intent = intent_router.classify(request.question, chat_history)
         intent_type = intent.value if hasattr(intent, 'value') else str(intent)
+        
+        # Classify query complexity and select appropriate model
+        complexity_classifier = get_complexity_classifier()
+        query_complexity = complexity_classifier.classify_complexity(request.question, intent)
+        
+        # Select model based on complexity
+        use_simple_prompt = (query_complexity == "simple")
+        if query_complexity == "simple":
+            llm = get_fast_llm_client()
+            fast_model_name = os.getenv("FAST_MODEL_NAME", "llama-3.1-8b-instant")
+            logger.info(f"Using fast model ({fast_model_name}) for simple query")
+        else:
+            llm = get_reasoning_llm_client()
+            reasoning_model_name = os.getenv("REASONING_MODEL_NAME", "llama-3.1-70b-versatile")
+            logger.info(f"Using reasoning model ({reasoning_model_name}) for complex query")
         
         # Handle different intents
         if intent == IntentType.GREETING:
@@ -660,11 +1652,19 @@ async def chat(
                 "- **Booking & Payment**: Get details about how to book and payment methods\n\n"
                 "What would you like to know more about?"
             )
+            # Generate follow-up actions for help
+            follow_up_actions = generate_follow_up_actions(
+                intent,
+                slot_manager.get_slots(),
+                request.question,
+                is_widget_query=is_widget_query
+            )
             return ChatResponse(
                 answer=answer,
                 sources=[],
                 intent=intent_type,
                 session_id=request.session_id,
+                follow_up_actions=follow_up_actions,
             )
         
         elif intent == IntentType.AFFIRMATIVE:
@@ -754,11 +1754,8 @@ async def chat(
             
             # Proceed with RAG using combined question (fall through to else block)
         
-        # Get slot manager and context tracker for manager-style features
-        slot_manager = session_manager.get_or_create_slot_manager(request.session_id, llm)
-        context_tracker = session_manager.get_or_create_context_tracker(request.session_id)
-        
         # Track intent in context BEFORE checking for slot responses
+        # (slot_manager and context_tracker already created above)
         context_tracker.add_intent(intent)
         
         # Check if this is a follow-up response to a slot question
@@ -787,9 +1784,51 @@ async def chat(
                     is_slot_response = True
                     logger.info(f"Detected slot response: '{request.question}' is answering previous slot question")
         
+        # Check for cottage availability queries before slot extraction
+        query_lower = request.question.lower()
+        availability_patterns = [
+            r"is\s+cottage\s+(\d+)\s+available",
+            r"cottage\s+(\d+)\s+available",
+            r"is\s+cottage\s+(\d+)\s+also\s+available",
+        ]
+        cottage_availability_match = None
+        for pattern in availability_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                cottage_availability_match = match.group(1)
+                logger.info(f"Detected cottage availability query for Cottage {cottage_availability_match}")
+                break
+        
         # Extract slots from query
         extracted_slots = slot_manager.extract_slots(request.question, intent)
+        
+        # Improve context retention: Check chat history for previous slot values
+        # This helps when user says "tell me the pricing" after "we are a group of 5 can we stay 4 nights"
+        if chat_history and len(chat_history) > 0:
+            # Look through recent messages for slot information that might not be in current query
+            for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
+                if isinstance(message, str) and "question:" in message:
+                    # Extract question from chat history format: "question: ..., answer: ..."
+                    parts = message.split("question:", 1)
+                    if len(parts) > 1:
+                        prev_query = parts[1].split("answer:")[0].strip()
+                        if prev_query and prev_query != request.question:
+                            # Try to extract slots from previous messages
+                            prev_slots = slot_manager.extract_slots(prev_query, intent)
+                            # Merge previous slots that aren't in current extraction
+                            for key, value in prev_slots.items():
+                                if key not in extracted_slots and value is not None:
+                                    # Only add if slot is not already set in slot_manager
+                                    if key not in slot_manager.slots or slot_manager.slots[key] is None:
+                                        extracted_slots[key] = value
+                                        logger.info(f"Retrieved {key}={value} from chat history: '{prev_query[:50]}...'")
+        
         slot_manager.update_slots(extracted_slots)
+        
+        # Update context_tracker.current_cottage if a cottage was extracted
+        current_cottage = slot_manager.get_current_cottage()
+        if current_cottage:
+            context_tracker.set_current_cottage(current_cottage)
         
         # If this is a slot response, use the previous intent instead of current classification
         if is_slot_response:
@@ -810,12 +1849,84 @@ async def chat(
         sentiment_analyzer = get_sentiment_analyzer(llm)
         sentiment = sentiment_analyzer.analyze(request.question)
         
+        # Check if this is a reasoning query that requires structured processing
+        # Capacity queries are detected by capacity_handler, not by intent type
+        reasoning_intents = [IntentType.PRICING, IntentType.AVAILABILITY, IntentType.BOOKING]
+        is_reasoning_query = intent in reasoning_intents
+        
+        # Also check if it's a capacity query (can be classified as FAQ_QUESTION or ROOMS)
+        capacity_handler = get_capacity_handler()
+        is_capacity_query = capacity_handler.is_capacity_query(request.question)
+        if is_capacity_query:
+            is_reasoning_query = True
+        
+        # For reasoning queries, validate slots before proceeding
+        # Note: Capacity queries can work with partial info, so we skip strict validation for them
+        # Note: Pricing queries are handled by pricing_handler which can default guests to 6, so skip strict validation
+        is_pricing_query_check = intent == IntentType.PRICING and get_pricing_handler().is_pricing_query(request.question)
+        if is_reasoning_query and not is_capacity_query and not is_pricing_query_check:
+            validation_result = slot_manager.validate_slots_for_intent(intent)
+            
+            if not validation_result["valid"]:
+                # Missing required slots - ask user before proceeding
+                missing_slots = validation_result["missing_slots"]
+                errors = validation_result["errors"]
+                
+                logger.info(f"Missing required slots for {intent.value}: {missing_slots}")
+                
+                # Generate follow-up question for missing slots
+                missing_slot = slot_manager.get_most_important_missing_slot(intent)
+                if missing_slot:
+                    try:
+                        slot_prompt = generate_slot_question_prompt(
+                            intent.value if hasattr(intent, 'value') else str(intent),
+                            missing_slot,
+                            slot_manager.get_slots()
+                        )
+                        follow_up = llm.generate_answer(slot_prompt, max_new_tokens=64).strip()
+                        follow_up = follow_up.strip('"').strip("'").strip()
+                        if follow_up and len(follow_up) > 10:
+                            answer_text = follow_up
+                        else:
+                            # Fallback to simple question
+                            slot_questions = {
+                                "guests": "How many guests will be staying?",
+                                "dates": "What dates are you planning to visit?",
+                                "room_type": "Do you have a preference for which cottage?",
+                                "family": "Will this be for a family or friends group?",
+                                "season": "Are you planning to visit on weekdays or weekends?",
+                            }
+                            answer_text = slot_questions.get(missing_slot, f"Please provide {missing_slot}.")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate slot question: {e}")
+                        slot_questions = {
+                            "guests": "How many guests will be staying?",
+                            "dates": "What dates are you planning to visit?",
+                            "room_type": "Do you have a preference for which cottage?",
+                            "family": "Will this be for a family or friends group?",
+                            "season": "Are you planning to visit on weekdays or weekends?",
+                        }
+                        answer_text = slot_questions.get(missing_slot, f"Please provide {missing_slot}.")
+                    
+                    if errors:
+                        answer_text += f"\n\nNote: {errors[0]}"
+                    
+                    # Update chat history
+                    chat_history.append(f"question: {request.question}, answer: {answer_text}")
+                    
+                    return ChatResponse(
+                        answer=answer_text,
+                        sources=[],
+                        intent=intent.value if hasattr(intent, 'value') else str(intent),
+                        session_id=request.session_id,
+                    )
+        
         # FAQ_QUESTION, UNKNOWN, REFINEMENT, or new manager intents - proceed with RAG
         manager_intents = [IntentType.PRICING, IntentType.ROOMS, IntentType.SAFETY, 
                           IntentType.BOOKING, IntentType.AVAILABILITY, IntentType.FACILITIES, IntentType.LOCATION]
         if intent in [IntentType.FAQ_QUESTION, IntentType.UNKNOWN, IntentType.REFINEMENT] + manager_intents:
-            # Check for image requests
-            is_image_request, cottage_numbers = detect_image_request(request.question)
+            # Check for image requests (use session context)
+            is_image_request, cottage_numbers = detect_image_request(request.question, slot_manager, context_tracker)
             
             # Check if this is a direct booking request
             is_booking_request = is_direct_booking_request(request.question)
@@ -827,6 +1938,37 @@ async def chat(
             )
             logger.info(f"Original query: {request.question}")
             logger.info(f"Refined query: {refined_question}")
+            
+            # Fallback: If refined question is empty or just whitespace, use original question
+            if not refined_question or not refined_question.strip():
+                logger.warning(f"Refined question is empty, using original question: {request.question}")
+                refined_question = request.question
+            
+            # Post-process refined question: If it still has pronouns and we have current_cottage, expand them
+            current_cottage = None
+            if slot_manager:
+                current_cottage = slot_manager.get_current_cottage()
+            if not current_cottage and context_tracker:
+                current_cottage = context_tracker.get_current_cottage()
+            
+            if current_cottage:
+                # Check if refined question still has pronouns that need expansion
+                refined_lower = refined_question.lower()
+                has_pronouns = any(phrase in refined_lower for phrase in ["this cottage", "that cottage", "the cottage", "it", "this one", "that one"])
+                has_cottage_number = any(f"cottage {num}" in refined_lower or f"cottage{num}" in refined_lower for num in ["7", "9", "11"])
+                
+                if has_pronouns and not has_cottage_number:
+                    # Manually expand pronouns to cottage number
+                    refined_question = refined_question.replace("this cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("that cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("the cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("this one", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("that one", f"cottage {current_cottage}")
+                    # Handle "it" more carefully - only replace if it's clearly about a cottage
+                    if "tell me more" in refined_lower or "what is" in refined_lower or "about it" in refined_lower:
+                        refined_question = refined_question.replace(" about it", f" about cottage {current_cottage}")
+                        refined_question = refined_question.replace(" about it?", f" about cottage {current_cottage}?")
+                    logger.info(f"Post-processed refined question with current_cottage {current_cottage}: {refined_question}")
             
             # Query optimization for better RAG retrieval
             if is_query_optimization_enabled():
@@ -875,16 +2017,52 @@ async def chat(
                 effective_k = max(effective_k, 5)  # Get at least 5 documents for group size queries
                 logger.info(f"Increased k to {effective_k} for group size/capacity query")
             
+            # Increase k for safety/security queries to get comprehensive information about guards, gated community, etc.
+            if any(word in query_lower for word in ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency", "secure for", "is it safe"]):
+                effective_k = max(effective_k, 5)  # Get at least 5 documents for safety queries
+                logger.info(f"Increased k to {effective_k} for safety/security query")
+            
+            # Increase k for safety/security queries to get comprehensive information about guards, gated community, etc.
+            if any(word in query_lower for word in ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency", "secure for", "is it safe"]):
+                effective_k = max(effective_k, 5)  # Get at least 5 documents for safety queries
+                logger.info(f"Increased k to {effective_k} for safety/security query")
+            
             # Retrieve documents
             retrieved_contents = []
             sources = []
             
             try:
                 # Retrieve more documents than needed to ensure diversity
-                retrieved_contents, sources = vector_store.similarity_search_with_threshold(
-                    query=search_query, k=min(effective_k * 3, 15), threshold=0.0  # Get 3x more for deduplication
-                )
-                logger.info(f"Retrieved {len(retrieved_contents)} documents with search query")
+                try:
+                    result = vector_store.similarity_search_with_threshold(
+                        query=search_query, k=min(effective_k * 3, 15), threshold=0.0  # Get 3x more for deduplication
+                    )
+                except TypeError as te:
+                    # Catch the "object of type 'int' has no len()" error
+                    logger.error(f"TypeError in similarity_search_with_threshold: {te}")
+                    result = None
+                except Exception as e:
+                    logger.error(f"Exception in similarity_search_with_threshold: {e}")
+                    result = None
+                
+                # Ensure we got a tuple of (list, list)
+                if result is not None and isinstance(result, tuple) and len(result) == 2:
+                    retrieved_contents, sources = result
+                    # Validate immediately after unpacking - BEFORE any len() calls
+                    if not isinstance(retrieved_contents, list):
+                        logger.error(f"retrieved_contents is not a list after unpacking: {type(retrieved_contents)}, value: {retrieved_contents}")
+                        retrieved_contents = []
+                    if not isinstance(sources, list):
+                        logger.error(f"sources is not a list after unpacking: {type(sources)}")
+                        sources = []
+                    
+                    # Safe to call len() now
+                    if isinstance(retrieved_contents, list):
+                        logger.info(f"Retrieved {len(retrieved_contents)} documents with search query")
+                else:
+                    logger.error(f"Unexpected result type from similarity_search_with_threshold: {type(result)}")
+                    retrieved_contents = []
+                    sources = []
                 
                 # Deduplicate by source to ensure diversity
                 seen_sources = set()
@@ -903,12 +2081,35 @@ async def chat(
                 
                 retrieved_contents = unique_contents
                 sources = unique_sources
+                
+                # Log retrieved documents for debugging
+                logger.info(f"Retrieved {len(retrieved_contents)} unique documents for query: '{search_query}'")
+                # Check if query mentions a specific cottage and verify we have documents about it
+                query_lower = search_query.lower()
+                for num in ["7", "9", "11"]:
+                    if f"cottage {num}" in query_lower or f"cottage{num}" in query_lower:
+                        cottage_docs_found = sum(1 for doc in retrieved_contents if f"cottage {num}" in doc.page_content.lower() or f"cottage{num}" in doc.page_content.lower())
+                        logger.info(f"Query mentions Cottage {num}: Found {cottage_docs_found} documents mentioning Cottage {num} out of {len(retrieved_contents)} total")
+                        if cottage_docs_found == 0 and len(retrieved_contents) > 0:
+                            logger.warning(f"⚠️ Query asks about Cottage {num} but no documents mention it! This may cause incorrect answers.")
+                for i, doc in enumerate(retrieved_contents[:5]):  # Log first 5
+                    doc_preview = doc.page_content[:100].replace('\n', ' ')
+                    logger.debug(f"  Doc {i+1}: {doc_preview}...")
                 logger.info(f"After deduplication: {len(retrieved_contents)} unique documents")
+                
+                # No truncation - use full documents
             except Exception as e:
                 logger.warning(f"Error with threshold search (refined): {e}, trying without threshold")
+                retrieved_contents = []
+                sources = []
                 try:
                     # Retrieve more for deduplication
-                    retrieved_contents = vector_store.similarity_search(query=search_query, k=min(effective_k * 3, 15))
+                    search_result = vector_store.similarity_search(query=search_query, k=min(effective_k * 3, 15))
+                    # Validate result is a list
+                    if not isinstance(search_result, list):
+                        logger.error(f"similarity_search returned non-list: {type(search_result)}")
+                        search_result = []
+                    retrieved_contents = search_result
                     # Deduplicate
                     seen_sources = set()
                     unique_contents = []
@@ -927,19 +2128,41 @@ async def chat(
                                 break
                     retrieved_contents = unique_contents
                     sources = unique_sources
+                    
+                    # No truncation - use full documents
                 except Exception as e2:
                     logger.error(f"Error with similarity search (refined): {e2}")
+                    # Ensure we have valid empty lists
+                    if not isinstance(retrieved_contents, list):
+                        retrieved_contents = []
+                    if not isinstance(sources, list):
+                        sources = []
             
             # If no results, try original query
             if not retrieved_contents:
                 logger.info("No results with optimized query, trying original query")
                 try:
-                    retrieved_contents, sources = vector_store.similarity_search_with_threshold(
+                    result = vector_store.similarity_search_with_threshold(
                         query=request.question, k=effective_k, threshold=0.0
                     )
+                    # Validate result
+                    if isinstance(result, tuple) and len(result) == 2:
+                        retrieved_contents, sources = result
+                        if not isinstance(retrieved_contents, list):
+                            logger.error(f"retrieved_contents is not a list: {type(retrieved_contents)}")
+                            retrieved_contents = []
+                            sources = []
+                    else:
+                        logger.error(f"Unexpected result type: {type(result)}")
+                        retrieved_contents = []
+                        sources = []
                 except Exception as e:
                     try:
-                        retrieved_contents = vector_store.similarity_search(query=request.question, k=effective_k)
+                        search_result = vector_store.similarity_search(query=request.question, k=effective_k)
+                        if not isinstance(search_result, list):
+                            logger.error(f"similarity_search returned non-list: {type(search_result)}")
+                            search_result = []
+                        retrieved_contents = search_result
                         sources = [
                             {
                                 "score": "N/A",
@@ -953,38 +2176,172 @@ async def chat(
                         retrieved_contents = []
                         sources = []
             
-                # Prioritize cottage-specific documents and documents mentioning cottage numbers for capacity queries
-                if retrieved_contents:
-                    query_lower = request.question.lower()
-                    # For capacity/group size queries, prioritize documents that mention cottage numbers
-                    if any(word in query_lower for word in ["member", "members", "people", "person", "persons", "guest", "guests", "group", "suitable", "best for", "accommodate", "capacity", "which cottage"]):
-                        # Prioritize documents that mention cottage numbers
-                        cottage_docs = []
-                        other_docs = []
-                        for doc in retrieved_contents:
-                            doc_text_lower = doc.page_content.lower()
-                            if any(cottage in doc_text_lower for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
-                                cottage_docs.append(doc)
-                            else:
-                                other_docs.append(doc)
-                        if cottage_docs:
-                            retrieved_contents = cottage_docs + other_docs
-                            logger.info(f"Prioritized {len(cottage_docs)} documents with cottage numbers for capacity query")
-                    else:
-                        # For other queries, use existing prioritization
-                        retrieved_contents = prioritize_cottage_documents(request.question, retrieved_contents)
+            # Process structured queries (pricing, capacity) BEFORE vector search
+            pricing_handler = get_pricing_handler()
+            pricing_result = None
+            # Check pricing query by handler (not just intent) - some pricing queries might be classified as ROOMS intent
+            if pricing_handler.is_pricing_query(request.question):
+                logger.info("Detected pricing query, processing with structured logic")
+                slots = slot_manager.get_slots()
+                # Use refined_question if available (includes cottage number from context), otherwise use original
+                question_for_pricing = refined_question if 'refined_question' in locals() and refined_question else request.question
+                pricing_result = pricing_handler.process_pricing_query(
+                    question_for_pricing, slots, retrieved_contents
+                )
+                if pricing_result.get("answer_template"):
+                    retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                        retrieved_contents, pricing_result
+                    )
             
             # Check if this is a capacity query and process it
             capacity_handler = get_capacity_handler()
+            capacity_result = None  # Initialize to track capacity query results
+            if capacity_handler.is_capacity_query(request.question):
+                logger.info("Detected capacity query, processing with structured logic")
+                capacity_result = capacity_handler.process_capacity_query(
+                    request.question, retrieved_contents
+                )
+                if capacity_result.get("answer_template"):
+                    retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                        retrieved_contents, capacity_result
+                    )
+            
+            # Check if this is an availability query and enhance context
+            if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
+                logger.info("Detected availability query, enhancing context with availability information")
+                # Extract cottage number if mentioned
+                cottage_num = None
+                query_lower = request.question.lower()
+                for num in ["7", "9", "11"]:
+                    if f"cottage {num}" in query_lower or f"cottage{num}" in query_lower:
+                        cottage_num = num
+                        break
+                
+                # Create availability information document
+                availability_info = f"""
+🚨🚨🚨 CRITICAL AVAILABILITY INFORMATION - HIGHEST PRIORITY 🚨🚨🚨
+
+MANDATORY AVAILABILITY RESPONSE:
+YES, Swiss Cottages ARE AVAILABLE THROUGHOUT THE YEAR (YEAR-ROUND), subject to existing bookings.
+
+AVAILABILITY STATUS:
+✅ Swiss Cottages are available year-round (throughout the year), subject to availability
+✅ All cottages (Cottage 7, 9, and 11) are available throughout the year
+✅ Availability is subject to existing bookings only
+
+{"COTTAGE-SPECIFIC INFORMATION:" if cottage_num else "GENERAL INFORMATION:"}
+{"✅ Cottage " + cottage_num + " is available throughout the year, subject to availability" if cottage_num else "✅ All cottages are available throughout the year, subject to availability"}
+
+BOOKING INFORMATION (MANAGER-STYLE):
+To confirm your booking:
+1. Provide your exact check-in and check-out dates
+2. Provide the number of guests
+3. Specify your preferred cottage (if any)
+4. Contact us to confirm availability and complete booking
+
+CONTACT INFORMATION:
+- Contact us: https://swisscottagesbhurban.com/contact-us/
+- Cottage Manager (Abdullah): +92 300 1218563
+
+⚠️⚠️⚠️ CRITICAL INSTRUCTIONS FOR LLM - YOU MUST FOLLOW THESE ⚠️⚠️⚠️:
+1. YOU MUST start your answer with: "Yes, Swiss Cottages are available throughout the year, subject to availability"
+2. DO NOT say "not available" or "options are not available" - cottages are available year-round
+3. DO NOT say "I don't have real-time availability" - say they are available year-round
+4. Always confirm availability positively and prominently
+5. Provide manager-style booking information with contact details
+6. If user provides dates, acknowledge them and guide them to contact for confirmation
+7. The cottages are available year-round - emphasize this clearly in your response
+"""
+                # Add as a document to retrieved contents (at the beginning for priority)
+                from entities.document import Document
+                availability_doc = Document(
+                    page_content=availability_info,
+                    metadata={"source": "availability_handler", "document": "availability_info"}
+                )
+                retrieved_contents.insert(0, availability_doc)
+                logger.info(f"Enhanced context with availability information for {'Cottage ' + cottage_num if cottage_num else 'all cottages'}")
+            
+            # Prioritize cottage-specific documents
+            if retrieved_contents:
+                query_lower = request.question.lower()
+                # For cottage availability queries, prioritize availability-specific FAQs
+                if cottage_availability_match:
+                    availability_docs = []
+                    other_docs = []
+                    cottage_num = cottage_availability_match
+                    for doc in retrieved_contents:
+                        doc_text_lower = doc.page_content.lower()
+                        source_lower = doc.metadata.get("source", "").lower()
+                        # Prioritize availability FAQs and documents mentioning the specific cottage
+                        if ("availability" in source_lower or "available" in doc_text_lower) and f"cottage {cottage_num}" in doc_text_lower:
+                            availability_docs.insert(0, doc)  # Highest priority
+                        elif f"cottage {cottage_num}" in doc_text_lower or f"cottage{cottage_num}" in doc_text_lower:
+                            availability_docs.append(doc)
+                        else:
+                            other_docs.append(doc)
+                    if availability_docs:
+                        retrieved_contents = availability_docs + other_docs
+                        logger.info(f"Prioritized {len(availability_docs)} availability documents for Cottage {cottage_num}")
+                # For capacity/group size queries, prioritize documents that mention cottage numbers
+                elif any(word in query_lower for word in ["member", "members", "people", "person", "persons", "guest", "guests", "group", "suitable", "best for", "accommodate", "capacity", "which cottage"]):
+                    # Prioritize documents that mention cottage numbers
+                    cottage_docs = []
+                    other_docs = []
+                    for doc in retrieved_contents:
+                        doc_text_lower = doc.page_content.lower()
+                        if any(cottage in doc_text_lower for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+                            cottage_docs.append(doc)
+                        else:
+                            other_docs.append(doc)
+                    if cottage_docs:
+                        retrieved_contents = cottage_docs + other_docs
+                        logger.info(f"Prioritized {len(cottage_docs)} documents with cottage numbers for capacity query")
+                else:
+                    # For other queries, use existing prioritization
+                    # Use refined_question for prioritization (includes cottage number from context)
+                    prioritization_query = refined_question if 'refined_question' in locals() else request.question
+                    retrieved_contents = prioritize_cottage_documents(prioritization_query, retrieved_contents)
+            
+            # Process structured queries BEFORE vector search (for reasoning queries)
+            # For reasoning queries, we do structured calculation first, then enhance with vector search
+            # For FAQ queries, we do vector search first (existing flow)
+            
+            # Check if this is a pricing query and process it with structured logic
+            # Process pricing queries BEFORE validation - pricing_handler can handle missing slots gracefully
+            # Check pricing query by handler (not just intent) - some pricing queries might be classified as ROOMS intent
+            pricing_handler = get_pricing_handler()
+            pricing_result = None
+            if pricing_handler.is_pricing_query(request.question):
+                logger.info("Detected pricing query, processing with structured logic")
+                slots = slot_manager.get_slots()
+                # Use refined_question if available (includes cottage number from context), otherwise use original
+                question_for_pricing = refined_question if 'refined_question' in locals() and refined_question else request.question
+                pricing_result = pricing_handler.process_pricing_query(
+                    question_for_pricing, slots, retrieved_contents
+                )
+                
+                # Enhance context with pricing analysis (even if missing info, to provide helpful context)
+                if pricing_result.get("answer_template"):
+                    retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                        retrieved_contents, pricing_result
+                    )
+                    if pricing_result.get("has_all_info"):
+                        logger.info(f"Enhanced context with pricing analysis: total_price={pricing_result.get('total_price')}")
+                    else:
+                        logger.info(f"Enhanced context with pricing info request: missing_slots={pricing_result.get('missing_slots')}")
+            
+            # Check if this is a capacity query and process it
+            capacity_handler = get_capacity_handler()
+            capacity_result = None  # Initialize to track capacity query results
             if capacity_handler.is_capacity_query(request.question):
                 logger.info("Detected capacity query, processing with structured logic")
                 capacity_result = capacity_handler.process_capacity_query(
                     request.question, retrieved_contents
                 )
                 
-                # Enhance context with capacity analysis if we have structured info
+                # Enhance context with capacity analysis (don't return early - let LLM generate natural answer)
                 # IMPORTANT: Enhance even if has_all_info is False (e.g., group-only queries)
-                if capacity_result.get("answer_template"):
+                if capacity_result:
                     retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
                         retrieved_contents, capacity_result
                     )
@@ -1109,7 +2466,27 @@ async def chat(
                     )
                 
                 # Generate answer with context (same as Streamlit)
-                max_new_tokens = request.max_new_tokens or 512
+                # Optimize max_new_tokens based on query complexity
+                base_max_tokens = request.max_new_tokens or 512
+                query_lower_for_tokens = request.question.lower()
+                
+                # Reduce tokens for simple queries (faster responses)
+                if any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]):
+                    max_new_tokens = min(base_max_tokens, 64)  # Very short for greetings/acknowledgments
+                # "Tell me about cottage X" - limit to prevent overly long responses
+                elif "tell me about" in query_lower_for_tokens and any(cottage in query_lower_for_tokens for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+                    max_new_tokens = min(base_max_tokens, 256)  # Limit for specific cottage questions
+                # "Tell me more" follow-ups - need more tokens to complete properly
+                elif any(phrase in query_lower_for_tokens for phrase in ["tell me more", "tell me more about", "more about", "more details", "more information"]):
+                    max_new_tokens = min(base_max_tokens, 512)  # Ensure enough tokens for follow-ups
+                elif len(request.question.split()) < 5:
+                    max_new_tokens = min(base_max_tokens, 256)  # Short for brief questions
+                elif any(word in query_lower_for_tokens for word in ["pricing", "price", "cost", "booking", "availability"]):
+                    max_new_tokens = base_max_tokens  # Full tokens for important queries
+                else:
+                    max_new_tokens = min(base_max_tokens, 512)  # Default for other queries
+                
+                logger.debug(f"Query complexity adjustment: base={base_max_tokens}, adjusted={max_new_tokens}")
                 
                 # Enhance question with slot information for pricing/booking queries
                 enhanced_question = refined_question
@@ -1126,25 +2503,102 @@ async def chat(
                         # Append slot info to question to make it explicit for LLM
                         enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
                 
-                streamer, _ = answer_with_context(
-                    llm,
-                    ctx_synthesis_strategy,
-                    enhanced_question,  # Use enhanced question with slot info
-                    chat_history,
-                    retrieved_contents,
-                    max_new_tokens,
-                )
+                # Apply essential information injection, pricing filtering, and safety prioritization
+                if retrieved_contents:
+                    # Inject essential info (capacity for cottage descriptions)
+                    slots_dict = slot_manager.get_slots() if slot_manager else {}
+                    retrieved_contents = inject_essential_info(retrieved_contents, request.question, slots_dict)
+                    
+                    # Filter pricing from context for non-pricing queries
+                    retrieved_contents = filter_pricing_from_context(retrieved_contents, request.question)
+                    if should_filter_pricing(request.question):
+                        logger.info(f"Filtered pricing from context for non-pricing query: {request.question}")
+                    
+                    # Prioritize safety documents for safety queries
+                    retrieved_contents = prioritize_safety_documents(retrieved_contents, request.question)
+                    safety_keywords = ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"]
+                    if any(kw in request.question.lower() for kw in safety_keywords):
+                        safety_docs_count = sum(1 for doc in retrieved_contents if any(
+                            indicator in doc.page_content.lower() for indicator in 
+                            ["guard", "guards", "security", "gated community", "secure", "safety", "emergency"]
+                        ))
+                        logger.info(f"Prioritized {safety_docs_count} safety documents for safety query")
                 
-                # Collect answer from streamer (same as Streamlit - no modifications)
+                try:
+                    streamer, _ = answer_with_context(
+                        llm,
+                        ctx_synthesis_strategy,
+                        enhanced_question,  # Use enhanced question with slot info
+                        chat_history,
+                        retrieved_contents,
+                        max_new_tokens,
+                        use_simple_prompt=use_simple_prompt,
+                    )
+                except Exception as e:
+                    error_msg = str(e)
+                    # Fallback: if fast model fails with 413 error, retry with reasoning model
+                    if "413" in error_msg or "Request too large" in error_msg or "too large" in error_msg.lower():
+                        llm_model_name = getattr(llm, 'model_name', None)
+                        fast_model_name = os.getenv("FAST_MODEL_NAME", "llama-3.1-8b-instant")
+                        if query_complexity == "simple" and llm_model_name == fast_model_name:
+                            logger.warning("Fast model returned 413 error, falling back to reasoning model")
+                            llm = get_reasoning_llm_client()
+                            use_simple_prompt = False  # Use full prompt with reasoning model
+                            logger.info("Retrying with reasoning model and full prompt")
+                            streamer, _ = answer_with_context(
+                                llm,
+                                ctx_synthesis_strategy,
+                                enhanced_question,
+                                chat_history,
+                                retrieved_contents,
+                                max_new_tokens,
+                                use_simple_prompt=False,
+                            )
+                            logger.info("Fallback to reasoning model succeeded")
+                        else:
+                            raise  # Re-raise if not a 413 error or not using fast model
+                    else:
+                        raise  # Re-raise if not a 413 error
+                
+                # Collect answer from streamer (filtering reasoning tags)
                 answer_text = ""
+                answer_buffer = ""
+                inside_reasoning = False
+                reasoning_start_tag = llm.model_settings.reasoning_start_tag if llm.model_settings.reasoning else None
+                reasoning_stop_tag = llm.model_settings.reasoning_stop_tag if llm.model_settings.reasoning else None
+                
                 for token in streamer:
                     parsed_token = llm.parse_token(token)
-                    answer_text += parsed_token
+                    if not parsed_token:
+                        continue
+                    
+                    answer_text += parsed_token  # Keep full text for fallback
+                    
+                    # Filter reasoning tags during collection
+                    if llm.model_settings.reasoning:
+                        stripped_token = parsed_token.strip()
+                        
+                        if reasoning_start_tag and reasoning_start_tag in stripped_token:
+                            inside_reasoning = True
+                            continue
+                        
+                        if reasoning_stop_tag and reasoning_stop_tag in stripped_token:
+                            inside_reasoning = False
+                            continue
+                        
+                        if inside_reasoning:
+                            continue
+                    
+                    # This is actual answer content
+                    answer_buffer += parsed_token
                 
-                # Handle reasoning models (same as Streamlit)
-                if llm.model_settings.reasoning:
+                # Use answer_buffer (without reasoning) if available, otherwise extract from full text
+                if answer_buffer:
+                    answer_text = answer_buffer
+                elif llm.model_settings.reasoning:
+                    # Fallback: extract reasoning if buffer is empty
                     answer_text = extract_content_after_reasoning(
-                        answer_text, llm.model_settings.reasoning_stop_tag
+                        answer_text, reasoning_stop_tag
                     )
                     if answer_text == "":
                         answer_text = "I didn't provide the answer; perhaps I can try again."
@@ -1152,9 +2606,129 @@ async def chat(
                 # Clean answer text to remove LLM reasoning/process text
                 answer_text = clean_answer_text(answer_text)
                 
+                # Check for incomplete responses (cut off mid-sentence)
+                if answer_text and not answer_text.strip().endswith(('.', '!', '?', ':', ';')):
+                    # Check if it ends mid-word or mid-sentence
+                    last_char = answer_text.strip()[-1] if answer_text.strip() else ''
+                    if last_char and last_char.isalnum():
+                        logger.warning(f"Response appears incomplete - ends with: '{answer_text[-50:]}' (last char: '{last_char}')")
+                        # Try to add a period if it's clearly incomplete
+                        if len(answer_text.strip()) > 20:  # Only if we have substantial content
+                            answer_text = answer_text.strip() + "."
+                            logger.info("Added period to incomplete response")
+                
+                # CRITICAL: Additional check to remove structured pricing template if it still exists
+                # This is a fallback in case the cleaning function didn't catch it
+                if answer_text and ('🚨 CRITICAL PRICING INFORMATION' in answer_text or 'STRUCTURED PRICING ANALYSIS' in answer_text.upper()):
+                    # Find where the actual answer starts (look for pricing information in natural language)
+                    answer_start_patterns = [
+                        r'(For \d+ nights?.*?total cost is PKR \d+)',
+                        r'(The total cost.*?PKR \d+)',
+                        r'(Total cost.*?PKR \d+)',
+                        r'(Cottage \d+.*?PKR \d+)',
+                        r'(For \d+ nights?.*?PKR \d+)',
+                    ]
+                    
+                    extracted_answer = None
+                    for pattern in answer_start_patterns:
+                        match = re.search(pattern, answer_text, re.IGNORECASE | re.DOTALL)
+                        if match:
+                            extracted_answer = match.group(1).strip()
+                            break
+                    
+                    if extracted_answer:
+                        answer_text = extracted_answer
+                    else:
+                        # If no pattern match, find first line that looks like an answer
+                        lines = answer_text.split('\n')
+                        for line in lines:
+                            line_stripped = line.strip()
+                            # Skip template lines
+                            if any(keyword in line_stripped.upper() for keyword in [
+                                'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'STRUCTURED PRICING',
+                                'DO NOT CONVERT', 'YOU MUST USE', 'ALL PRICES ARE IN PKR',
+                                '🚨', '⚠️'
+                            ]):
+                                continue
+                            # Look for actual answer content
+                            if len(line_stripped) > 20 and ('PKR' in line_stripped or 'cost' in line_stripped.lower() or 'nights' in line_stripped.lower()):
+                                # Find this line's index and take everything from here
+                                idx = lines.index(line)
+                                answer_text = '\n'.join(lines[idx:]).strip()
+                                break
+                
                 # Validate currency - check if answer has dollar prices when context has PKR
                 context_text = "\n".join([doc.page_content for doc in retrieved_contents[:3]])  # Get context from top 3 docs
                 answer_text = validate_and_fix_currency(answer_text, context_text)
+                
+                # Filter out generic requests for group size when it's already known from capacity query
+                if capacity_result and capacity_result.get("group_size") is not None:
+                    group_size = capacity_result.get("group_size")
+                    # Remove phrases that ask for group size/guests when it's already known
+                    phrases_to_remove = [
+                        r"share your dates,?\s*(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        r"number of\s*guests(?:,?\s*and preferences)?",
+                        r"how many\s*guests",
+                        r"how many\s*people",
+                        r"number of\s*people",
+                        r"guests?\s*(?:and\s*)?preferences",
+                        r"dates,?\s*(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                    ]
+                    for phrase in phrases_to_remove:
+                        # Replace with just asking for dates and preferences (not guests)
+                        answer_text = re.sub(
+                            phrase,
+                            "dates and preferences",
+                            answer_text,
+                            flags=re.IGNORECASE
+                        )
+                    # Also replace specific patterns that include "guests" in the request
+                    answer_text = re.sub(
+                        r"share your\s+(?:dates,?\s*)?(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        "share your dates and preferences",
+                        answer_text,
+                        flags=re.IGNORECASE
+                    )
+                    answer_text = re.sub(
+                        r"yes!?\s*share your\s+(?:dates,?\s*)?(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        "Yes! To recommend the best cottage for your stay, please share your dates and preferences",
+                        answer_text,
+                        flags=re.IGNORECASE
+                    )
+                    logger.info(f"Filtered out group size requests from answer (group_size={group_size} already known)")
+                
+                # Filter out "not available" responses for availability queries
+                if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
+                    # Replace negative availability responses with positive ones
+                    negative_patterns = [
+                        r"(?:options?|cottages?|cottage \d+)\s+(?:for|are)\s+(?:staying|staying at|booking)\s+(?:are\s+)?not\s+available",
+                        r"not\s+available\s+(?:for|to stay|for staying)",
+                        r"(?:options?|cottages?)\s+are\s+not\s+available",
+                    ]
+                    for pattern in negative_patterns:
+                        if re.search(pattern, answer_text, flags=re.IGNORECASE):
+                            # Replace with positive availability message
+                            answer_text = re.sub(
+                                pattern,
+                                "are available throughout the year, subject to availability. To confirm your booking",
+                                answer_text,
+                                flags=re.IGNORECASE
+                            )
+                            logger.info("Replaced negative availability response with positive availability confirmation")
+                    
+                    # Also check for phrases like "For [dates], the options... are not available"
+                    if re.search(r"for\s+.*?the\s+options?.*?are\s+not\s+available", answer_text, flags=re.IGNORECASE):
+                        # Extract dates if mentioned
+                        date_match = re.search(r"for\s+([^,]+?)(?:,|\.|$)", answer_text, flags=re.IGNORECASE)
+                        if date_match:
+                            dates = date_match.group(1).strip()
+                            answer_text = re.sub(
+                                r"for\s+.*?the\s+options?.*?are\s+not\s+available",
+                                f"for {dates}, Swiss Cottages are available throughout the year, subject to availability. To confirm your booking",
+                                answer_text,
+                                flags=re.IGNORECASE
+                            )
+                            logger.info(f"Replaced negative availability response with positive confirmation for dates: {dates}")
                 
                 # Score confidence in retrieval and answer
                 confidence_scorer = get_confidence_scorer(llm)
@@ -1217,6 +2791,7 @@ async def chat(
                                     chat_history,
                                     first_doc_only,
                                     max_new_tokens,
+                                    use_simple_prompt=use_simple_prompt,
                                 )
                                 answer_text = ""
                                 for token in streamer:
@@ -1317,6 +2892,29 @@ async def chat(
                             # Slot was just provided, don't ask for it again
                             logger.info(f"Slot '{missing_slot}' was just extracted, skipping follow-up question")
                             missing_slot = None
+                        # Special check: Don't ask about room_type if cottage is mentioned in query or chat history
+                        elif missing_slot == "room_type":
+                            # Check if cottage was mentioned in the current query
+                            from bot.conversation.number_extractor import ExtractCottageNumber
+                            cottage_extractor = ExtractCottageNumber()
+                            cottage_mentioned = cottage_extractor.extract_cottage_number(request.question)
+                            
+                            # Also check chat history for cottage mentions
+                            if not cottage_mentioned and chat_history:
+                                for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
+                                    if isinstance(message, str):
+                                        # Extract question from chat history format
+                                        if "question:" in message:
+                                            prev_query = message.split("question:")[1].split("answer:")[0].strip()
+                                            if prev_query:
+                                                cottage_mentioned = cottage_extractor.extract_cottage_number(prev_query)
+                                                if cottage_mentioned:
+                                                    logger.info(f"Cottage {cottage_mentioned} mentioned in chat history, skipping room_type question")
+                                                    break
+                            
+                            if cottage_mentioned:
+                                logger.info(f"Cottage {cottage_mentioned} mentioned in query or history, skipping room_type question")
+                                missing_slot = None
                     except Exception as e:
                         logger.warning(f"Error getting missing slot: {e}")
                 
@@ -1390,8 +2988,17 @@ async def chat(
                     if cross_rec:
                         response_parts.append(f"\n\n{cross_rec}")
                 
+                # Add proactive image offer for cottage-specific queries
+                should_offer, cottage_num = should_offer_images(request.question, answer_text)
+                if should_offer and cottage_num and not is_image_request:
+                    image_offer = f"\n\n📷 **Would you like to see images of Cottage {cottage_num}?** Just say 'yes' or 'show images'."
+                    response_parts.append(image_offer)
+                    # Store in session for "yes" handling
+                    session_manager.set_session_data(request.session_id, "image_offer_cottage", cottage_num)
+                    logger.info(f"Added image offer for Cottage {cottage_num}")
+                
                 # Add image recommendation when cottage is mentioned (but not if user already asked for images)
-                if not is_image_request:  # Only suggest if user hasn't already asked for images
+                if not is_image_request and not should_offer:  # Only suggest if user hasn't already asked for images
                     image_rec = recommendation_engine.generate_image_recommendation(
                         request.question,
                         slot_manager.get_slots(),
@@ -1474,12 +3081,21 @@ async def chat(
                     cottage_image_urls = all_images[:6]  # Limit total images
                     logger.info(f"Returning {len(cottage_image_urls)} image URLs")
                 
+                # Generate follow-up actions
+                follow_up_actions = generate_follow_up_actions(
+                    intent,
+                    slot_manager.get_slots(),
+                    request.question,
+                    is_widget_query=is_widget_query
+                )
+                
                 return ChatResponse(
                     answer=answer_text,
                     sources=source_infos,
                     intent=intent_type,
                     session_id=request.session_id,
                     cottage_images=cottage_image_urls,
+                    follow_up_actions=follow_up_actions,
                 )
             else:
                 # No documents found
@@ -1502,6 +3118,1322 @@ async def chat(
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    llm=Depends(get_llm_client),
+    vector_store=Depends(get_vector_store),
+    intent_router=Depends(get_intent_router),
+):
+    """Streaming chat endpoint using Server-Sent Events."""
+    async def generate():
+        try:
+            # Use initial llm from dependency for slot_manager (before complexity-based selection)
+            initial_llm = llm
+            # Get slot manager and context tracker early for image detection
+            slot_manager = session_manager.get_or_create_slot_manager(request.session_id, initial_llm)
+            context_tracker = session_manager.get_or_create_context_tracker(request.session_id)
+            
+            # Pre-processing: Check for "yes" responses to image offers
+            # Detect if this is a widget-triggered query
+            widget_query_patterns = [
+                "I want to check availability and book a cottage for my dates",
+                "Show me images and photos of the cottages",
+                "What are the prices and cottage options? Compare weekday and weekend rates",
+                "Tell me about the location and nearby attractions near Swiss Cottages Bhurban"
+            ]
+            is_widget_query = any(pattern.lower() in request.question.lower() for pattern in widget_query_patterns)
+            
+            query_lower = request.question.lower()
+            is_yes_response = any(word in query_lower for word in ["yes", "yeah", "yep", "sure", "ok", "okay", "show me", "show images", "show photos"])
+            
+            # Check if previous message offered images (stored in session)
+            if is_yes_response:
+                session_data = session_manager.get_session_data(request.session_id)
+                if session_data and session_data.get("image_offer_cottage"):
+                    cottage_num = session_data.get("image_offer_cottage")
+                    # User said yes to image offer - show images
+                    is_image_request = True
+                    cottage_numbers = [cottage_num]
+                    # Clear the offer from session
+                    session_manager.set_session_data(request.session_id, "image_offer_cottage", None)
+                else:
+                    is_image_request, cottage_numbers = detect_image_request(request.question, slot_manager, context_tracker)
+            else:
+                is_image_request, cottage_numbers = detect_image_request(request.question, slot_manager, context_tracker)
+            
+            # Pre-processing: Handle explicit image requests early
+            if is_image_request and cottage_numbers:
+                logger.info(f"Detected explicit image request for cottages: {cottage_numbers} in stream")
+                # Get images directly without going through full RAG
+                root_folder = get_root_folder()
+                dropbox_config = get_dropbox_config()
+                use_dropbox = dropbox_config.get("use_dropbox", False)
+                logger.info(f"Dropbox config - use_dropbox: {use_dropbox}, available cottages: {list(dropbox_config.get('cottage_image_urls', {}).keys())}")
+                
+                # Group images by cottage
+                cottage_images_dict = {}
+                
+                for cottage_num in cottage_numbers:
+                    cottage_images = []
+                    
+                    if use_dropbox:
+                        logger.info(f"Attempting to get Dropbox URLs for cottage {cottage_num} in stream")
+                        dropbox_urls = get_dropbox_image_urls(cottage_num, max_images=6)
+                        logger.info(f"Got {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num} in stream")
+                        if dropbox_urls:
+                            cottage_images.extend(dropbox_urls)
+                            logger.info(f"Using {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num} in stream")
+                        else:
+                            logger.warning(f"No Dropbox URLs found for cottage {cottage_num}, falling back to local files in stream")
+                            # Fallback to local files
+                            images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                            for img_path in images:
+                                rel_path = img_path.relative_to(root_folder)
+                                from urllib.parse import quote
+                                encoded_path = str(rel_path).replace('\\', '/')
+                                url_path = '/'.join(quote(part, safe='') for part in encoded_path.split('/'))
+                                image_url = f"/images/{url_path}"
+                                cottage_images.append(image_url)
+                    else:
+                        logger.info(f"Dropbox not enabled, using local files for cottage {cottage_num} in stream")
+                        images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                        for img_path in images:
+                            rel_path = img_path.relative_to(root_folder)
+                            from urllib.parse import quote
+                            encoded_path = str(rel_path).replace('\\', '/')
+                            url_path = '/'.join(quote(part, safe='') for part in encoded_path.split('/'))
+                            image_url = f"/images/{url_path}"
+                            cottage_images.append(image_url)
+                    
+                    if cottage_images:
+                        cottage_images_dict[cottage_num] = cottage_images
+                
+                if cottage_images_dict:
+                    # Generate a brief response
+                    if len(cottage_numbers) == 1:
+                        answer = f"Here are images of Cottage {cottage_numbers[0]}:"
+                    else:
+                        answer = f"Here are images of the cottages:"
+                    
+                    total_images = sum(len(imgs) for imgs in cottage_images_dict.values())
+                    logger.info(f"Returning {total_images} image URLs grouped by cottage: {list(cottage_images_dict.keys())} in stream")
+                    
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'cottage_images': cottage_images_dict})}\n\n"
+                    return
+                else:
+                    # No images found, provide helpful message
+                    answer = "I'm sorry, I couldn't find images for the requested cottages. Please contact us for more information."
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    return
+            
+            # Pre-processing: Check for manager contact queries
+            manager_contact_patterns = [
+                "how can i contact the manager", "contact the manager", "contact manager",
+                "manager contact", "manager's contact", "manager contact details",
+                "manager phone", "manager number", "cottage manager", "who is the manager",
+                "manager information", "reach the manager", "speak to manager"
+            ]
+            if any(pattern in query_lower for pattern in manager_contact_patterns):
+                answer = (
+                    "**Cottage Manager Contact Information** 📞\n\n"
+                    "**Abdullah** is the cottage manager at Swiss Cottages Bhurban.\n\n"
+                    "**Contact Details:**\n"
+                    "- **Phone:** +92 300 1218563\n"
+                    "- **Alternate Phone (Urgent):** +92 327 8837088\n"
+                    "- **Contact Form:** https://swisscottagesbhurban.com/contact-us/\n\n"
+                    "Abdullah can help you with:\n"
+                    "- Bookings and availability\n"
+                    "- Pricing and special requests\n"
+                    "- General assistance before or during your stay\n\n"
+                    "Feel free to reach out for personalized assistance! 🏡"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Pre-processing: Check for single room/person queries
+            single_room_patterns = [
+                "single room", "one room", "individual room", "separate room",
+                "single person", "one person", "individual person", "solo",
+                "just me", "only me", "by myself", "alone"
+            ]
+            if any(pattern in query_lower for pattern in single_room_patterns):
+                answer = (
+                    "Swiss Cottages Bhurban rents **entire cottages**, not individual rooms. 🏡\n\n"
+                    "Each cottage is a fully private, self-contained unit that includes:\n"
+                    "- Multiple bedrooms (2-3 bedrooms depending on cottage)\n"
+                    "- Living areas\n"
+                    "- Kitchen\n"
+                    "- Terrace/balcony\n"
+                    "- Parking\n\n"
+                    "**Important:** Even if you're traveling alone or as a single person, you would rent the entire cottage. "
+                    "The base pricing is for up to 6 guests, so a single person would still rent the full cottage.\n\n"
+                    "Would you like to know more about:\n"
+                    "- Pricing for a single person stay\n"
+                    "- Which cottage would be best for you\n"
+                    "- Availability and booking information"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Pre-processing: Check for cottage listing queries
+            # IMPORTANT: This must run BEFORE general "tell me about" handler
+            
+            # Check for "how many cottages" or "total cottages" queries FIRST
+            total_cottages_patterns = [
+                "how many cottages", "total cottages", "number of cottages",
+                "how many cottages do you have", "total number of cottages"
+            ]
+            
+            if any(pattern in query_lower for pattern in total_cottages_patterns):
+                registry = get_cottage_registry()
+                answer = registry.format_total_cottages_response()
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Flexible cottage listing detection using keyword combination
+            # Check if query contains "cottages" + listing keywords
+            has_cottages_keyword = "cottage" in query_lower or "cottages" in query_lower
+            listing_keywords = [
+                "you have", "do you have", "available", "offer", "list", 
+                "which", "what", "show me", "tell me about the cottages"
+            ]
+            has_listing_intent = any(keyword in query_lower for keyword in listing_keywords)
+            
+            # Also check for explicit listing patterns
+            explicit_listing_patterns = [
+                "which cottages", "what cottages", "list cottages", 
+                "cottages do you have", "cottages you have",
+                "available cottages", "cottages available",
+                "what cottages do you", "which cottages do you"
+            ]
+            has_explicit_pattern = any(pattern in query_lower for pattern in explicit_listing_patterns)
+            
+            # If query is about listing cottages (not general info about swiss cottages)
+            if has_cottages_keyword and (has_listing_intent or has_explicit_pattern):
+                # Additional check: exclude general "tell me about swiss cottages" or "tell me about the cottages" queries
+                # These should go to RAG for general information
+                is_general_info_query = (
+                    "tell me about swiss cottages" in query_lower or
+                    "tell me about the swiss cottages" in query_lower or
+                    "tell me about the cottages" in query_lower or
+                    ("tell me about" in query_lower and "cottages" in query_lower and 
+                     "you have" not in query_lower and "available" not in query_lower and
+                     "which" not in query_lower and "what" not in query_lower and
+                     "list" not in query_lower)
+                )
+                
+                if not is_general_info_query:
+                    registry = get_cottage_registry()
+                    # This will automatically filter to show only 9 and 11 (not 7)
+                    answer = registry.format_cottage_list(query=request.question, show_total=False)
+                    answer += (
+                        "\n\nAll cottages include:\n"
+                        "- Fully equipped kitchen\n"
+                        "- Living lounge\n"
+                        "- Bedrooms and bathrooms\n"
+                        "- Outdoor terrace/balcony\n"
+                        "- Wi-Fi, smart TV with Netflix\n"
+                        "- Heating system\n"
+                        "- Secure parking\n\n"
+                        "Would you like to know more about:\n"
+                        "- Pricing for a specific cottage\n"
+                        "- Which cottage is best for your group size\n"
+                        "- Availability and booking information"
+                    )
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    return
+            
+            # Handle 2-bedroom queries (will show Cottage 7)
+            if "2 bedroom" in query_lower or "two bedroom" in query_lower:
+                registry = get_cottage_registry()
+                cottages = registry.list_cottages_by_filter(query=request.question)
+                if cottages:
+                    answer = f"🏡 **2-Bedroom Cottages:**\n\n"
+                    for cottage in cottages:
+                        answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
+                        answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
+                        answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
+                    answer += "Would you like to know about pricing or availability?"
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    return
+            
+            # Handle 3-bedroom queries (will show Cottages 9 and 11)
+            if "3 bedroom" in query_lower or "three bedroom" in query_lower:
+                registry = get_cottage_registry()
+                cottages = registry.list_cottages_by_filter(query=request.question)
+                if cottages:
+                    answer = f"🏡 **3-Bedroom Cottages:**\n\n"
+                    for cottage in cottages:
+                        answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
+                        answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
+                        answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
+                    answer += "Would you like to know about pricing or availability?"
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    return
+            
+            # Get or create chat history
+            chat_history = session_manager.get_or_create_session(request.session_id, total_length=2)
+            
+            # Get synthesis strategy
+            strategy_name = request.synthesis_strategy or "create-and-refine"
+            ctx_synthesis_strategy = get_ctx_synthesis_strategy(strategy_name)
+            
+            # Classify intent
+            intent = intent_router.classify(request.question, chat_history)
+            intent_type = intent.value if hasattr(intent, 'value') else str(intent)
+            
+            # Classify query complexity and select appropriate model
+            complexity_classifier = get_complexity_classifier()
+            query_complexity = complexity_classifier.classify_complexity(request.question, intent)
+            
+            # Select model based on complexity
+            use_simple_prompt = (query_complexity == "simple")
+            if query_complexity == "simple":
+                selected_llm = get_fast_llm_client()
+                fast_model_name = os.getenv("FAST_MODEL_NAME", "llama-3.1-8b-instant")
+                logger.info(f"Using fast model ({fast_model_name}) for simple query")
+            else:
+                selected_llm = get_reasoning_llm_client()
+                reasoning_model_name = os.getenv("REASONING_MODEL_NAME", "llama-3.1-70b-versatile")
+                logger.info(f"Using reasoning model ({reasoning_model_name}) for complex query")
+            
+            # Handle simple intents
+            if intent == IntentType.GREETING:
+                answer = (
+                    "Hi! 👋 How may I help you today?\n\n"
+                    "I can help you with information about Swiss Cottages Bhurban, including:\n"
+                    "- Pricing and availability\n"
+                    "- Facilities and amenities\n"
+                    "- Location and nearby attractions\n"
+                    "- Booking and payment information\n\n"
+                    "What would you like to know?"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            elif intent == IntentType.HELP:
+                answer = (
+                    "I can help you with information about Swiss Cottages Bhurban! 🏡\n\n"
+                    "Here's what I can assist you with:\n"
+                    "- **Pricing & Availability**: Get information about rates, booking, and availability\n"
+                    "- **Facilities & Amenities**: Learn about what's available at the cottages\n"
+                    "- **Location & Nearby**: Find out about the location and nearby attractions\n"
+                    "- **Booking & Payment**: Get details about how to book and payment methods\n\n"
+                    "What would you like to know more about?"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            elif intent == IntentType.AFFIRMATIVE:
+                answer = (
+                    "Great! What would you like to know about Swiss Cottages Bhurban?\n\n"
+                    "I can help you with:\n"
+                    "- **Pricing & Availability**: Rates, booking, availability\n"
+                    "- **Facilities & Amenities**: What's available at the cottages\n"
+                    "- **Location & Nearby**: Location details and nearby attractions\n"
+                    "- **Booking & Payment**: How to book and payment methods\n\n"
+                    "Just ask me any question, and I'll find the information for you!"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            elif intent == IntentType.NEGATIVE:
+                answer = "Great! Feel free to reach out if you have any questions about Swiss Cottages Bhurban. Have a wonderful day! 😊"
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            elif intent == IntentType.STATEMENT:
+                query_lower = request.question.lower().strip()
+                if not any(phrase in query_lower for phrase in [
+                    'but we', 'but i', 'but they', 'but which', 'but what', 'but how', 'but when', 'but where',
+                    'but can', 'but is', 'but are', 'but do', 'but does', 'but will', 'but would',
+                    'we are', 'we have', 'we need', 'we want', 'which cottage', 'what cottage'
+                ]):
+                    answer = "You're welcome! 😊\n\nIs there anything else you'd like to know about Swiss Cottages Bhurban?"
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    return
+            
+            elif intent == IntentType.CLARIFICATION_NEEDED:
+                clar_question = intent_router.get_clarification_question(request.question)
+                answer = f"To give you the most accurate answer, could you please clarify: **{clar_question}**"
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Track intent in context (slot_manager and context_tracker already created above)
+            context_tracker.add_intent(intent)
+            
+            # Check for cottage availability queries
+            query_lower_stream = request.question.lower()
+            availability_patterns = [
+                r"is\s+cottage\s+(\d+)\s+available",
+                r"cottage\s+(\d+)\s+available",
+                r"is\s+cottage\s+(\d+)\s+also\s+available",
+            ]
+            cottage_availability_match_stream = None
+            for pattern in availability_patterns:
+                match = re.search(pattern, query_lower_stream)
+                if match:
+                    cottage_availability_match_stream = match.group(1)
+                    logger.info(f"Detected cottage availability query for Cottage {cottage_availability_match_stream}")
+                    break
+            
+            # Extract slots
+            extracted_slots = slot_manager.extract_slots(request.question, intent)
+            
+            # Improve context retention: Check chat history for previous slot values
+            if chat_history and len(chat_history) > 0:
+                for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
+                    if isinstance(message, str) and "question:" in message:
+                        parts = message.split("question:", 1)
+                        if len(parts) > 1:
+                            prev_query = parts[1].split("answer:")[0].strip()
+                            if prev_query and prev_query != request.question:
+                                prev_slots = slot_manager.extract_slots(prev_query, intent)
+                                for key, value in prev_slots.items():
+                                    if key not in extracted_slots and value is not None:
+                                        if key not in slot_manager.slots or slot_manager.slots[key] is None:
+                                            extracted_slots[key] = value
+                                            logger.info(f"Retrieved {key}={value} from chat history in stream endpoint")
+            
+            slot_manager.update_slots(extracted_slots)
+            
+            # Update context_tracker.current_cottage if a cottage was extracted
+            current_cottage = slot_manager.get_current_cottage()
+            if current_cottage:
+                context_tracker.set_current_cottage(current_cottage)
+            
+            # Check if this intent should proceed with RAG
+            manager_intents = [IntentType.PRICING, IntentType.ROOMS, IntentType.SAFETY, 
+                            IntentType.BOOKING, IntentType.AVAILABILITY, IntentType.FACILITIES, IntentType.LOCATION]
+            if intent not in [IntentType.FAQ_QUESTION, IntentType.UNKNOWN, IntentType.REFINEMENT] + manager_intents:
+                # This intent doesn't need RAG, return early
+                answer = "I'm not sure how to help with that. Could you please ask about Swiss Cottages Bhurban?"
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Analyze sentiment
+            sentiment_analyzer = get_sentiment_analyzer(selected_llm)
+            sentiment = sentiment_analyzer.analyze(request.question)
+            
+            # Check for image requests (already detected in pre-processing, don't overwrite)
+            # is_image_request and cottage_numbers are already set in pre-processing section
+            is_booking_request = is_direct_booking_request(request.question)
+            
+            # Refine question
+            max_new_tokens = request.max_new_tokens or 128
+            refined_question = refine_question(
+                selected_llm, request.question, chat_history=chat_history, max_new_tokens=max_new_tokens
+            )
+            logger.info(f"Original query: {request.question}")
+            logger.info(f"Refined query: {refined_question}")
+            
+            # Fallback: If refined question is empty or just whitespace, use original question
+            if not refined_question or not refined_question.strip():
+                logger.warning(f"Refined question is empty, using original question: {request.question}")
+                refined_question = request.question
+            
+            # Post-process refined question: If it still has pronouns and we have current_cottage, expand them
+            current_cottage = None
+            if slot_manager:
+                current_cottage = slot_manager.get_current_cottage()
+            if not current_cottage and context_tracker:
+                current_cottage = context_tracker.get_current_cottage()
+            
+            if current_cottage:
+                # Check if refined question still has pronouns that need expansion
+                refined_lower = refined_question.lower()
+                has_pronouns = any(phrase in refined_lower for phrase in ["this cottage", "that cottage", "the cottage", "it", "this one", "that one"])
+                has_cottage_number = any(f"cottage {num}" in refined_lower or f"cottage{num}" in refined_lower for num in ["7", "9", "11"])
+                
+                if has_pronouns and not has_cottage_number:
+                    # Manually expand pronouns to cottage number
+                    refined_question = refined_question.replace("this cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("that cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("the cottage", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("this one", f"cottage {current_cottage}")
+                    refined_question = refined_question.replace("that one", f"cottage {current_cottage}")
+                    # Handle "it" more carefully - only replace if it's clearly about a cottage
+                    if "tell me more" in refined_lower or "what is" in refined_lower or "about it" in refined_lower:
+                        refined_question = refined_question.replace(" about it", f" about cottage {current_cottage}")
+                        refined_question = refined_question.replace(" about it?", f" about cottage {current_cottage}?")
+                    logger.info(f"Post-processed refined question with current_cottage {current_cottage}: {refined_question}")
+            
+            # Query optimization
+            if is_query_optimization_enabled():
+                try:
+                    optimized_query = optimize_query_for_rag(
+                        selected_llm,
+                        refined_question,
+                        max_new_tokens=max_new_tokens
+                    )
+                    search_query = optimized_query
+                except Exception as e:
+                    logger.warning(f"Query optimization failed: {e}, using refined query")
+                    search_query = refined_question
+            else:
+                search_query = refined_question
+            
+            # Determine effective k
+            effective_k = request.k or 3
+            query_lower = request.question.lower()
+            
+            if any(word in query_lower for word in ["available", "availability", "which cottages", "which cottage", "vacant", "vacancy"]):
+                effective_k = max(effective_k, 5)
+            
+            if any(word in query_lower for word in ["payment", "price", "pricing", "cost", "rate", "methods", "book", "booking", "reserve"]):
+                effective_k = max(effective_k, 5)
+            
+            if any(cottage in query_lower for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+                effective_k = max(effective_k, 5)
+            
+            if any(word in query_lower for word in ["cook", "kitchen", "facility", "amenity", "amenities", "facilities", "what", "tell me about", "information about", "about cottages", "about the cottages"]):
+                effective_k = max(effective_k, 5)
+            
+            if any(word in query_lower for word in ["member", "members", "people", "person", "persons", "guest", "guests", "group", "suitable", "best for", "accommodate", "capacity"]):
+                effective_k = max(effective_k, 5)
+            
+            # Initialize pricing and capacity handlers (will process AFTER retrieval)
+            pricing_handler = get_pricing_handler()
+            pricing_result = None
+            # Check pricing query by handler (not just intent) - some pricing queries might not be classified as PRICING intent
+            is_pricing_query = pricing_handler.is_pricing_query(request.question)
+            
+            capacity_handler = get_capacity_handler()
+            capacity_result = None
+            is_capacity_query = capacity_handler.is_capacity_query(request.question)
+            
+            # Send searching status (only if we're going to search)
+            yield f"data: {json.dumps({'type': 'searching', 'message': 'Searching knowledge base...'})}\n\n"
+            await asyncio.sleep(0.05)
+            
+            # Retrieve documents
+            retrieved_contents = []
+            sources = []
+            
+            try:
+                # For general queries, increase k to get more comprehensive information
+                if any(phrase in request.question.lower() for phrase in [
+                    "tell me about", "what is", "about swiss cottages", "about the cottages",
+                    "information about", "describe"
+                ]):
+                    effective_k = max(effective_k, 8)  # Get more documents for general queries
+                    logger.info(f"Increased k to {effective_k} for general query")
+                
+                result = vector_store.similarity_search_with_threshold(
+                    query=search_query, k=min(effective_k * 3, 20), threshold=0.0
+                )
+                
+                # Validate result
+                if isinstance(result, tuple) and len(result) == 2:
+                    retrieved_contents, sources = result
+                    if not isinstance(retrieved_contents, list) or not isinstance(sources, list):
+                        logger.error(f"Invalid result types: retrieved_contents={type(retrieved_contents)}, sources={type(sources)}")
+                        retrieved_contents = []
+                        sources = []
+                else:
+                    logger.error(f"Unexpected result type from similarity_search_with_threshold: {type(result)}")
+                    retrieved_contents = []
+                    sources = []
+                
+                # Deduplicate
+                seen_sources = set()
+                unique_contents = []
+                unique_sources = []
+                
+                for doc, source_info in zip(retrieved_contents, sources):
+                    source = source_info.get("document", "unknown")
+                    if source not in seen_sources:
+                        seen_sources.add(source)
+                        unique_contents.append(doc)
+                        unique_sources.append(source_info)
+                        if len(unique_contents) >= effective_k:
+                            break
+                
+                retrieved_contents = unique_contents
+                sources = unique_sources
+                
+                # No truncation - use full documents
+                
+                # Process pricing query AFTER retrieval (needs documents)
+                if is_pricing_query:
+                    logger.info("Processing pricing query with retrieved documents")
+                    slots = slot_manager.get_slots()
+                    # Use refined_question if available (includes cottage number from context), otherwise use original
+                    question_for_pricing = refined_question if 'refined_question' in locals() and refined_question else request.question
+                    pricing_result = pricing_handler.process_pricing_query(
+                        question_for_pricing, slots, retrieved_contents
+                    )
+                    if pricing_result and pricing_result.get("answer_template"):
+                        # If pricing has all info, return early with structured answer
+                        if pricing_result.get("has_all_info"):
+                            logger.info("Pricing query has all info, returning structured answer")
+                            answer = pricing_result["answer_template"]
+                            # Format sources
+                            pricing_sources = []
+                            if sources:
+                                for src in sources[:effective_k]:
+                                    if isinstance(src, dict):
+                                        pricing_sources.append(src)
+                            yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                            yield f"data: {json.dumps({'type': 'done', 'sources': pricing_sources})}\n\n"
+                            return
+                        # Enhance context with pricing info
+                        retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                            retrieved_contents, pricing_result
+                        )
+                        # Keep only the first document (pricing doc)
+                        retrieved_contents = retrieved_contents[:1]
+                
+                # Process capacity query AFTER retrieval (needs documents)
+                if is_capacity_query:
+                    logger.info("Processing capacity query with retrieved documents")
+                    capacity_result = capacity_handler.process_capacity_query(
+                        request.question, retrieved_contents
+                    )
+                    # Enhance context with capacity info (don't return early - let LLM generate natural answer)
+                    if capacity_result:
+                        retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                            retrieved_contents, capacity_result
+                        )
+                        logger.info(f"Enhanced context with capacity analysis: suitable={capacity_result.get('suitable')}, has_all_info={capacity_result.get('has_all_info')}")
+                
+                # Check if this is an availability query and enhance context
+                if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
+                    logger.info("Detected availability query in stream, enhancing context with availability information")
+                    # Extract cottage number if mentioned
+                    cottage_num = None
+                    query_lower_stream = request.question.lower()
+                    for num in ["7", "9", "11"]:
+                        if f"cottage {num}" in query_lower_stream or f"cottage{num}" in query_lower_stream:
+                            cottage_num = num
+                            break
+                    
+                    # Create availability information document
+                    availability_info = f"""
+🚨🚨🚨 CRITICAL AVAILABILITY INFORMATION - HIGHEST PRIORITY 🚨🚨🚨
+
+MANDATORY AVAILABILITY RESPONSE:
+YES, Swiss Cottages ARE AVAILABLE THROUGHOUT THE YEAR (YEAR-ROUND), subject to existing bookings.
+
+AVAILABILITY STATUS:
+✅ Swiss Cottages are available year-round (throughout the year), subject to availability
+✅ All cottages (Cottage 7, 9, and 11) are available throughout the year
+✅ Availability is subject to existing bookings only
+
+{"COTTAGE-SPECIFIC INFORMATION:" if cottage_num else "GENERAL INFORMATION:"}
+{"✅ Cottage " + cottage_num + " is available throughout the year, subject to availability" if cottage_num else "✅ All cottages are available throughout the year, subject to availability"}
+
+BOOKING INFORMATION (MANAGER-STYLE):
+To confirm your booking:
+1. Provide your exact check-in and check-out dates
+2. Provide the number of guests
+3. Specify your preferred cottage (if any)
+4. Contact us to confirm availability and complete booking
+
+CONTACT INFORMATION:
+- Contact us: https://swisscottagesbhurban.com/contact-us/
+- Cottage Manager (Abdullah): +92 300 1218563
+
+⚠️⚠️⚠️ CRITICAL INSTRUCTIONS FOR LLM - YOU MUST FOLLOW THESE ⚠️⚠️⚠️:
+1. YOU MUST start your answer with: "Yes, Swiss Cottages are available throughout the year, subject to availability"
+2. DO NOT say "not available" or "options are not available" - cottages are available year-round
+3. DO NOT say "I don't have real-time availability" - say they are available year-round
+4. Always confirm availability positively and prominently
+5. Provide manager-style booking information with contact details
+6. If user provides dates, acknowledge them and guide them to contact for confirmation
+7. The cottages are available year-round - emphasize this clearly in your response
+"""
+                    # Add as a document to retrieved contents (at the beginning for priority)
+                    from entities.document import Document
+                    availability_doc = Document(
+                        page_content=availability_info,
+                        metadata={"source": "availability_handler", "document": "availability_info"}
+                    )
+                    retrieved_contents.insert(0, availability_doc)
+                    logger.info(f"Enhanced context with availability information in stream for {'Cottage ' + cottage_num if cottage_num else 'all cottages'}")
+                
+                # Prioritize cottage-specific documents for availability queries
+                if retrieved_contents:
+                    query_lower_stream = request.question.lower()
+                    # For cottage availability queries, prioritize availability-specific FAQs
+                    if cottage_availability_match_stream:
+                        availability_docs = []
+                        other_docs = []
+                        cottage_num = cottage_availability_match_stream
+                        for doc in retrieved_contents:
+                            doc_text_lower = doc.page_content.lower()
+                            source_lower = doc.metadata.get("source", "").lower()
+                            # Prioritize availability FAQs and documents mentioning the specific cottage
+                            if ("availability" in source_lower or "available" in doc_text_lower) and f"cottage {cottage_num}" in doc_text_lower:
+                                availability_docs.insert(0, doc)  # Highest priority
+                            elif f"cottage {cottage_num}" in doc_text_lower or f"cottage{cottage_num}" in doc_text_lower:
+                                availability_docs.append(doc)
+                            else:
+                                other_docs.append(doc)
+                        if availability_docs:
+                            retrieved_contents = availability_docs + other_docs
+                            logger.info(f"Prioritized {len(availability_docs)} availability documents for Cottage {cottage_num} in stream")
+                    else:
+                        # For other queries, use existing prioritization
+                        # Use refined_question for prioritization (includes cottage number from context)
+                        prioritization_query = refined_question if 'refined_question' in locals() else request.question
+                        retrieved_contents = prioritize_cottage_documents(prioritization_query, retrieved_contents)
+                
+            except Exception as e:
+                logger.warning(f"Error with threshold search: {e}")
+                retrieved_contents = []
+                sources = []
+            
+            # Send sources found status
+            if sources and len(sources) > 0:
+                yield f"data: {json.dumps({'type': 'sources_found', 'sources': sources[:effective_k]})}\n\n"
+                await asyncio.sleep(0.05)
+            
+            if not retrieved_contents:
+                # Hide searching message before showing fallback
+                yield f"data: {json.dumps({'type': 'hide_searching'})}\n\n"
+                await asyncio.sleep(0.05)
+                
+                answer = (
+                    "I couldn't find specific information about that in our knowledge base.\n\n"
+                    "💡 **Please try:**\n"
+                    "- Rephrasing your question\n"
+                    "- Using different keywords\n"
+                    "- Being more specific about Swiss Cottages Bhurban\n"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Check relevance
+            is_relevant, reason = check_document_relevance(request.question, retrieved_contents)
+            
+            if not is_relevant:
+                answer = (
+                    f"❌ **I don't have information about that in the knowledge base.**\n\n"
+                    f"**Your question:** {request.question}\n\n"
+                    f"**Issue:** {reason}\n\n"
+                    "💡 **Note:** I only have information about Swiss Cottages Bhurban (in Pakistan).\n"
+                )
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                return
+            
+            # Send typing indicator
+            yield f"data: {json.dumps({'type': 'typing', 'message': 'Bot is typing...'})}\n\n"
+            await asyncio.sleep(0.05)
+            
+            # Generate answer with streaming
+            # Optimize max_new_tokens based on query complexity
+            base_max_tokens = request.max_new_tokens or 512
+            query_lower_for_tokens = request.question.lower()
+            
+            # Reduce tokens for simple queries (faster responses)
+            if any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]):
+                max_new_tokens = min(base_max_tokens, 64)  # Very short for greetings/acknowledgments
+            # "Tell me about cottage X" - limit to prevent overly long responses
+            elif "tell me about" in query_lower_for_tokens and any(cottage in query_lower_for_tokens for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+                max_new_tokens = min(base_max_tokens, 256)  # Limit for specific cottage questions
+            # "Tell me more" follow-ups - need more tokens to complete properly
+            elif any(phrase in query_lower_for_tokens for phrase in ["tell me more", "tell me more about", "more about", "more details", "more information"]):
+                max_new_tokens = min(base_max_tokens, 512)  # Ensure enough tokens for follow-ups
+            elif len(request.question.split()) < 5:
+                max_new_tokens = min(base_max_tokens, 256)  # Short for brief questions
+            elif any(word in query_lower_for_tokens for word in ["pricing", "price", "cost", "booking", "availability"]):
+                max_new_tokens = base_max_tokens  # Full tokens for important queries
+            else:
+                max_new_tokens = min(base_max_tokens, 512)  # Default for other queries
+            
+            logger.debug(f"Query complexity adjustment: base={base_max_tokens}, adjusted={max_new_tokens}")
+            
+            enhanced_question = refined_question
+            
+            if intent in [IntentType.PRICING, IntentType.BOOKING] and slot_manager.get_slots():
+                slots = slot_manager.get_slots()
+                slot_info_parts = []
+                if slots.get("nights"):
+                    slot_info_parts.append(f"for {slots['nights']} nights")
+                if slots.get("guests"):
+                    slot_info_parts.append(f"for {slots['guests']} guests")
+                if slots.get("room_type"):
+                    slot_info_parts.append(f"in {slots['room_type']}")
+                if slot_info_parts:
+                    enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
+            
+            # Apply essential information injection, pricing filtering, and safety prioritization
+            if retrieved_contents:
+                # Inject essential info (capacity for cottage descriptions)
+                slots_dict = slot_manager.get_slots() if slot_manager else {}
+                retrieved_contents = inject_essential_info(retrieved_contents, request.question, slots_dict)
+                
+                # Filter pricing from context for non-pricing queries
+                retrieved_contents = filter_pricing_from_context(retrieved_contents, request.question)
+                if should_filter_pricing(request.question):
+                    logger.info(f"Filtered pricing from context for non-pricing query: {request.question}")
+                
+                # Prioritize safety documents for safety queries
+                retrieved_contents = prioritize_safety_documents(retrieved_contents, request.question)
+                safety_keywords = ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"]
+                if any(kw in request.question.lower() for kw in safety_keywords):
+                    safety_docs_count = sum(1 for doc in retrieved_contents if any(
+                        indicator in doc.page_content.lower() for indicator in 
+                        ["guard", "guards", "security", "gated community", "secure", "safety", "emergency"]
+                    ))
+                    logger.info(f"Prioritized {safety_docs_count} safety documents for safety query")
+            
+            # Validate inputs before calling answer_with_context
+            if not retrieved_contents:
+                logger.error("retrieved_contents is empty - cannot generate answer")
+                answer = "I couldn't find specific information about that in our knowledge base.\n\n💡 **Please try:**\n- Rephrasing your question\n- Using different keywords\n- Being more specific about Swiss Cottages Bhurban"
+                error_sources = []
+                if sources:
+                    for src in sources[:effective_k]:
+                        if isinstance(src, dict):
+                            error_sources.append(src)
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                return
+            
+            if not ctx_synthesis_strategy:
+                logger.error("ctx_synthesis_strategy is None")
+                answer = "I encountered an error while processing your question. Please try again."
+                error_sources = []
+                if sources:
+                    for src in sources[:effective_k]:
+                        if isinstance(src, dict):
+                            error_sources.append(src)
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                return
+            
+            try:
+                # Log before calling to help debug
+                logger.info(f"Calling answer_with_context with {len(retrieved_contents)} documents, strategy: {type(ctx_synthesis_strategy).__name__}, use_simple_prompt: {use_simple_prompt}")
+                streamer, _ = answer_with_context(
+                    selected_llm,
+                    ctx_synthesis_strategy,
+                    enhanced_question,
+                    chat_history,
+                    retrieved_contents,
+                    max_new_tokens,
+                    use_simple_prompt=use_simple_prompt,
+                )
+                logger.info(f"answer_with_context returned successfully, streamer type: {type(streamer)}")
+            except Exception as e:
+                error_type = type(e).__name__
+                error_msg = str(e)
+                logger.error(f"Error calling answer_with_context: {error_type}: {error_msg}", exc_info=True)
+                logger.error(f"retrieved_contents count: {len(retrieved_contents) if retrieved_contents else 0}")
+                
+                # Fallback: if 413 error (Request too large), retry with simple prompt
+                if "413" in error_msg or "Request too large" in error_msg or "too large" in error_msg.lower():
+                    if not use_simple_prompt:
+                        logger.warning("Request too large (413 error), retrying with simple prompt to reduce size")
+                        try:
+                            streamer, _ = answer_with_context(
+                                selected_llm,
+                                ctx_synthesis_strategy,
+                                enhanced_question,
+                                chat_history,
+                                retrieved_contents,
+                                max_new_tokens,
+                                use_simple_prompt=True,  # Use simple prompt to reduce size
+                            )
+                            logger.info("Retry with simple prompt succeeded")
+                        except Exception as retry_e:
+                            logger.error(f"Retry with simple prompt also failed: {retry_e}")
+                            raise  # Re-raise the original error if retry also fails
+                    else:
+                        raise  # Re-raise if already using simple prompt
+                else:
+                    raise  # Re-raise if not a 413 error
+                logger.error(f"retrieved_contents types: {[type(doc).__name__ for doc in retrieved_contents[:3]] if retrieved_contents else 'empty'}")
+                logger.error(f"ctx_synthesis_strategy: {type(ctx_synthesis_strategy).__name__}")
+                logger.error(f"selected_llm: {type(selected_llm).__name__ if 'selected_llm' in locals() else 'not assigned'}")
+                logger.error(f"enhanced_question: {enhanced_question[:100]}")
+                logger.error(f"max_new_tokens: {max_new_tokens}")
+                
+                # Fallback: if 413 error (Request too large), retry with simple prompt first
+                if "413" in error_msg or "Request too large" in error_msg or "too large" in error_msg.lower():
+                    if not use_simple_prompt:
+                        logger.warning("Request too large (413 error), retrying with simple prompt to reduce size")
+                        try:
+                            streamer, _ = answer_with_context(
+                                selected_llm,
+                                ctx_synthesis_strategy,
+                                enhanced_question,
+                                chat_history,
+                                retrieved_contents,
+                                max_new_tokens,
+                                use_simple_prompt=True,  # Use simple prompt to reduce size
+                            )
+                            logger.info("Retry with simple prompt succeeded")
+                            # Continue with streaming instead of returning error
+                        except Exception as retry_error:
+                            logger.error(f"Retry with simple prompt also failed: {retry_error}")
+                            # If simple prompt also fails, try reasoning model (if not already using it)
+                            llm_model_name = getattr(selected_llm, 'model_name', None)
+                            reasoning_model_name = os.getenv("REASONING_MODEL_NAME", "llama-3.1-70b-versatile")
+                            if llm_model_name != reasoning_model_name:
+                                logger.warning("Simple prompt also failed, trying reasoning model")
+                                try:
+                                    selected_llm = get_reasoning_llm_client()
+                                    logger.info("Retrying with reasoning model and simple prompt")
+                                    streamer, _ = answer_with_context(
+                                        selected_llm,
+                                        ctx_synthesis_strategy,
+                                        enhanced_question,
+                                        chat_history,
+                                        retrieved_contents,
+                                        max_new_tokens,
+                                        use_simple_prompt=True,  # Still use simple prompt
+                                    )
+                                    logger.info("Fallback to reasoning model with simple prompt succeeded")
+                                    # Continue with streaming instead of returning error
+                                except Exception as fallback_error:
+                                    logger.error(f"Fallback to reasoning model also failed: {fallback_error}")
+                                    answer = f"I encountered an error ({error_type}: {error_msg[:100]}). Please try again or rephrase your question."
+                                    error_sources = []
+                                    if sources:
+                                        for src in sources[:effective_k]:
+                                            if isinstance(src, dict):
+                                                error_sources.append(src)
+                                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                                    return
+                            else:
+                                # Already using reasoning model, give up
+                                answer = f"I encountered an error ({error_type}: {error_msg[:100]}). Please try again or rephrase your question."
+                                error_sources = []
+                                if sources:
+                                    for src in sources[:effective_k]:
+                                        if isinstance(src, dict):
+                                            error_sources.append(src)
+                                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                                yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                                return
+                    else:
+                        # Already using simple prompt, try reasoning model if not already using it
+                        llm_model_name = getattr(selected_llm, 'model_name', None)
+                        reasoning_model_name = os.getenv("REASONING_MODEL_NAME", "llama-3.1-70b-versatile")
+                        if llm_model_name != reasoning_model_name:
+                            logger.warning("Simple prompt failed with 413, trying reasoning model")
+                            try:
+                                selected_llm = get_reasoning_llm_client()
+                                logger.info("Retrying with reasoning model and simple prompt")
+                                streamer, _ = answer_with_context(
+                                    selected_llm,
+                                    ctx_synthesis_strategy,
+                                    enhanced_question,
+                                    chat_history,
+                                    retrieved_contents,
+                                    max_new_tokens,
+                                    use_simple_prompt=True,
+                                )
+                                logger.info("Fallback to reasoning model succeeded")
+                                # Continue with streaming instead of returning error
+                            except Exception as fallback_error:
+                                logger.error(f"Fallback to reasoning model also failed: {fallback_error}")
+                                answer = f"I encountered an error ({error_type}: {error_msg[:100]}). Please try again or rephrase your question."
+                                error_sources = []
+                                if sources:
+                                    for src in sources[:effective_k]:
+                                        if isinstance(src, dict):
+                                            error_sources.append(src)
+                                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                                yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                                return
+                        else:
+                            # Already using reasoning model with simple prompt, give up
+                            answer = f"I encountered an error ({error_type}: {error_msg[:100]}). Please try again or rephrase your question."
+                            error_sources = []
+                            if sources:
+                                for src in sources[:effective_k]:
+                                    if isinstance(src, dict):
+                                        error_sources.append(src)
+                        yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                        return
+                else:
+                    # For debugging, include error type in response
+                    answer = f"I encountered an error ({error_type}: {error_msg[:100]}). Please try again or rephrase your question."
+                    error_sources = []
+                    if sources:
+                        for src in sources[:effective_k]:
+                            if isinstance(src, dict):
+                                error_sources.append(src)
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                    return
+            
+            if not streamer:
+                logger.error("Streamer is None or empty")
+                answer = "I couldn't generate a response. Please try again."
+                # Format sources for error response
+                error_sources = []
+                if sources:
+                    for src in sources[:effective_k]:
+                        if isinstance(src, dict):
+                            error_sources.append(src)
+                yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': error_sources})}\n\n"
+                return
+            
+            # Stream tokens
+            full_answer = ""
+            token_count = 0
+            total_estimated_tokens = max_new_tokens  # Estimate for progress
+            inside_reasoning = False
+            reasoning_start_tag = selected_llm.model_settings.reasoning_start_tag if selected_llm.model_settings.reasoning else None
+            reasoning_stop_tag = selected_llm.model_settings.reasoning_stop_tag if selected_llm.model_settings.reasoning else None
+            answer_buffer = ""  # Buffer for answer content (excluding reasoning)
+            
+            try:
+                logger.info(f"Starting to iterate over streamer, type: {type(streamer)}")
+                token_iter_count = 0
+                for token in streamer:
+                    token_iter_count += 1
+                    if token_iter_count == 1:
+                        logger.info(f"First token received: {type(token)}, value: {str(token)[:100] if token else 'None'}")
+                    if token is None:
+                        logger.debug(f"Token {token_iter_count} is None, skipping")
+                        continue
+                    parsed_token = selected_llm.parse_token(token)
+                    if not parsed_token:
+                        logger.debug(f"Token {token_iter_count} parsed to empty, skipping")
+                        continue
+                    
+                    # Check for reasoning tags
+                    if selected_llm.model_settings.reasoning:
+                        stripped_token = parsed_token.strip()
+                        
+                        # Check if we're entering reasoning mode
+                        if reasoning_start_tag and reasoning_start_tag in stripped_token:
+                            inside_reasoning = True
+                            # Don't send reasoning start tag to client
+                            continue
+                        
+                        # Check if we're exiting reasoning mode
+                        if reasoning_stop_tag and reasoning_stop_tag in stripped_token:
+                            inside_reasoning = False
+                            # Don't send reasoning stop tag to client
+                            continue
+                        
+                        # Skip tokens that are part of reasoning
+                        if inside_reasoning:
+                            # Still accumulate for full_answer but don't stream
+                            full_answer += parsed_token
+                            continue
+                    
+                    # This is actual answer content
+                    full_answer += parsed_token
+                    answer_buffer += parsed_token
+                    token_count += 1
+                    
+                    # Send token to client
+                    yield f"data: {json.dumps({'type': 'token', 'chunk': parsed_token})}\n\n"
+                    
+                    # Send progress update every 10 tokens
+                    if token_count % 10 == 0:
+                        progress = min(100, int((token_count / total_estimated_tokens) * 100))
+                        yield f"data: {json.dumps({'type': 'progress', 'progress': progress, 'tokens': token_count})}\n\n"
+                    
+                    await asyncio.sleep(0.01)  # Small delay for smooth streaming
+                
+                logger.info(f"Finished iterating over streamer: {token_iter_count if 'token_iter_count' in locals() else 'unknown'} tokens iterated, {token_count} tokens accumulated")
+                if 'token_iter_count' in locals() and token_iter_count == 0:
+                    logger.error("CRITICAL: Streamer yielded no tokens at all! The generator is empty or not working.")
+                elif 'token_iter_count' in locals() and token_count == 0 and token_iter_count > 0:
+                    logger.warning(f"Streamer yielded {token_iter_count} tokens but none were accumulated (all filtered out or empty)")
+                
+                # Check for incomplete responses (cut off mid-sentence) in streaming
+                if full_answer and not full_answer.strip().endswith(('.', '!', '?', ':', ';')):
+                    last_char = full_answer.strip()[-1] if full_answer.strip() else ''
+                    if last_char and last_char.isalnum():
+                        logger.warning(f"Streaming response appears incomplete - ends with: '{full_answer[-50:]}' (last char: '{last_char}', tokens: {token_count})")
+                        # Add period if substantial content exists
+                        if len(full_answer.strip()) > 20:
+                            full_answer = full_answer.strip() + "."
+                            answer_buffer = answer_buffer.strip() + "."
+                            logger.info("Added period to incomplete streaming response")
+                    
+            except Exception as stream_error:
+                logger.error(f"Error during token streaming: {stream_error}", exc_info=True)
+                logger.error(f"Token iteration count before error: {token_iter_count if 'token_iter_count' in locals() else 'not initialized'}")
+                # If streaming fails, try to send what we have
+                if not answer_buffer and not full_answer:
+                    full_answer = "I encountered an error while generating the response. Please try again."
+                else:
+                    # Use answer_buffer if available (without reasoning), otherwise full_answer
+                    full_answer = answer_buffer if answer_buffer else full_answer
+            
+            # Final reasoning extraction as fallback (in case tags weren't detected during streaming)
+            if selected_llm.model_settings.reasoning and not answer_buffer:
+                try:
+                    full_answer = extract_content_after_reasoning(
+                        full_answer, reasoning_stop_tag
+                    )
+                    if full_answer == "":
+                        full_answer = "I didn't provide the answer; perhaps I can try again."
+                except Exception as e:
+                    logger.warning(f"Error extracting reasoning content: {e}")
+            elif answer_buffer:
+                # Use the answer buffer (which excludes reasoning)
+                full_answer = answer_buffer
+            
+            # Clean answer
+            try:
+                cleaned = clean_answer_text(full_answer)
+                if cleaned:  # Only use cleaned version if it's not empty
+                    full_answer = cleaned
+                else:
+                    logger.warning(f"clean_answer_text returned empty, keeping original full_answer")
+                
+                # Final check for incomplete responses after cleaning
+                if full_answer and not full_answer.strip().endswith(('.', '!', '?', ':', ';')):
+                    last_char = full_answer.strip()[-1] if full_answer.strip() else ''
+                    if last_char and last_char.isalnum() and len(full_answer.strip()) > 20:
+                        logger.warning(f"Final answer appears incomplete after cleaning - ends with: '{full_answer[-50:]}'")
+                        full_answer = full_answer.strip() + "."
+                        logger.info("Added period to incomplete final answer")
+                
+                # CRITICAL: Additional check to remove structured pricing template if it still exists
+                if full_answer and ('🚨 CRITICAL PRICING INFORMATION' in full_answer or 'STRUCTURED PRICING ANALYSIS' in full_answer.upper()):
+                    # Find where the actual answer starts
+                    answer_start_patterns = [
+                        r'(For \d+ nights?.*?total cost is PKR \d+)',
+                        r'(The total cost.*?PKR \d+)',
+                        r'(Total cost.*?PKR \d+)',
+                        r'(Cottage \d+.*?PKR \d+)',
+                        r'(For \d+ nights?.*?PKR \d+)',
+                    ]
+                    
+                    extracted_answer = None
+                    for pattern in answer_start_patterns:
+                        match = re.search(pattern, full_answer, re.IGNORECASE | re.DOTALL)
+                        if match:
+                            extracted_answer = match.group(1).strip()
+                            break
+                    
+                    if extracted_answer:
+                        full_answer = extracted_answer
+                    else:
+                        # Find first line that looks like an answer
+                        lines = full_answer.split('\n')
+                        for line in lines:
+                            line_stripped = line.strip()
+                            if any(keyword in line_stripped.upper() for keyword in [
+                                'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'STRUCTURED PRICING',
+                                'DO NOT CONVERT', 'YOU MUST USE', 'ALL PRICES ARE IN PKR', '🚨', '⚠️'
+                            ]):
+                                continue
+                            if len(line_stripped) > 20 and ('PKR' in line_stripped or 'cost' in line_stripped.lower() or 'nights' in line_stripped.lower()):
+                                idx = lines.index(line)
+                                full_answer = '\n'.join(lines[idx:]).strip()
+                                break
+            except Exception as e:
+                logger.warning(f"Error cleaning answer text: {e}")
+            
+            # Validate currency
+            try:
+                context_text = "\n".join([doc.page_content for doc in retrieved_contents[:3]])
+                validated = validate_and_fix_currency(full_answer, context_text)
+                if validated:  # Only use validated version if it's not empty
+                    full_answer = validated
+                else:
+                    logger.warning(f"validate_and_fix_currency returned empty, keeping original full_answer")
+            except Exception as e:
+                logger.warning(f"Error validating currency: {e}")
+            
+            # Final safeguard: ensure full_answer is not empty
+            if not full_answer or not full_answer.strip():
+                logger.error(f"full_answer is empty after processing! answer_buffer={answer_buffer[:100] if answer_buffer else 'empty'}, token_count={token_count}")
+                # Try to use answer_buffer if available
+                if answer_buffer and answer_buffer.strip():
+                    full_answer = answer_buffer
+                    logger.info(f"Using answer_buffer as fallback: {answer_buffer[:100]}")
+                else:
+                    full_answer = "I'm sorry, I encountered an issue generating the response. Please try asking your question again."
+                    logger.warning("Both full_answer and answer_buffer are empty, using fallback message")
+            
+            # Filter out generic requests for group size when it's already known from capacity query
+            try:
+                if capacity_result and capacity_result.get("group_size") is not None:
+                    group_size = capacity_result.get("group_size")
+                    # Remove phrases that ask for group size/guests when it's already known
+                    phrases_to_remove = [
+                        r"share your dates,?\s*(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        r"number of\s*guests(?:,?\s*and preferences)?",
+                        r"how many\s*guests",
+                        r"how many\s*people",
+                        r"number of\s*people",
+                        r"guests?\s*(?:and\s*)?preferences",
+                        r"dates,?\s*(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                    ]
+                    for phrase in phrases_to_remove:
+                        # Replace with just asking for dates and preferences (not guests)
+                        full_answer = re.sub(
+                            phrase,
+                            "dates and preferences",
+                            full_answer,
+                            flags=re.IGNORECASE
+                        )
+                    # Also replace specific patterns that include "guests" in the request
+                    full_answer = re.sub(
+                        r"share your\s+(?:dates,?\s*)?(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        "share your dates and preferences",
+                        full_answer,
+                        flags=re.IGNORECASE
+                    )
+                    full_answer = re.sub(
+                        r"yes!?\s*share your\s+(?:dates,?\s*)?(?:number of\s*)?guests(?:,?\s*and preferences)?",
+                        "Yes! To recommend the best cottage for your stay, please share your dates and preferences",
+                        full_answer,
+                        flags=re.IGNORECASE
+                    )
+                    logger.info(f"Filtered out group size requests from streaming answer (group_size={group_size} already known)")
+                
+                # Filter out "not available" responses for availability queries
+                if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
+                    # Replace negative availability responses with positive ones
+                    negative_patterns = [
+                        r"(?:options?|cottages?|cottage \d+)\s+(?:for|are)\s+(?:staying|staying at|booking)\s+(?:are\s+)?not\s+available",
+                        r"not\s+available\s+(?:for|to stay|for staying)",
+                        r"(?:options?|cottages?)\s+are\s+not\s+available",
+                    ]
+                    for pattern in negative_patterns:
+                        if re.search(pattern, full_answer, flags=re.IGNORECASE):
+                            # Replace with positive availability message
+                            full_answer = re.sub(
+                                pattern,
+                                "are available throughout the year, subject to availability. To confirm your booking",
+                                full_answer,
+                                flags=re.IGNORECASE
+                            )
+                            logger.info("Replaced negative availability response with positive availability confirmation in stream")
+                    
+                    # Also check for phrases like "For [dates], the options... are not available"
+                    if re.search(r"for\s+.*?the\s+options?.*?are\s+not\s+available", full_answer, flags=re.IGNORECASE):
+                        # Extract dates if mentioned
+                        date_match = re.search(r"for\s+([^,]+?)(?:,|\.|$)", full_answer, flags=re.IGNORECASE)
+                        if date_match:
+                            dates = date_match.group(1).strip()
+                            full_answer = re.sub(
+                                r"for\s+.*?the\s+options?.*?are\s+not\s+available",
+                                f"for {dates}, Swiss Cottages are available throughout the year, subject to availability. To confirm your booking",
+                                full_answer,
+                                flags=re.IGNORECASE
+                            )
+                            logger.info(f"Replaced negative availability response with positive confirmation for dates in stream: {dates}")
+            except Exception as e:
+                logger.warning(f"Error filtering group size requests: {e}")
+            
+            # Get cottage images if requested
+            cottage_image_urls = None
+            if is_image_request and cottage_numbers:
+                dropbox_config = get_dropbox_config()
+                use_dropbox = dropbox_config.get("use_dropbox", False)
+                all_images = []
+                
+                if use_dropbox:
+                    for cottage_num in cottage_numbers:
+                        dropbox_urls = get_dropbox_image_urls(cottage_num, max_images=6)
+                        if dropbox_urls:
+                            all_images.extend(dropbox_urls)
+                else:
+                    root_folder = get_root_folder()
+                    for cottage_num in cottage_numbers:
+                        images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                        for img_path in images:
+                            rel_path = img_path.relative_to(root_folder)
+                            from urllib.parse import quote
+                            encoded_path = str(rel_path).replace('\\', '/')
+                            url_path = '/'.join(quote(part, safe='') for part in encoded_path.split('/'))
+                            image_url = f"/images/{url_path}"
+                            all_images.append(image_url)
+                
+                cottage_image_urls = all_images[:6]
+            
+            # Format sources for JSON serialization
+            sources_list = []
+            for src in sources[:effective_k]:
+                if isinstance(src, dict):
+                    sources_list.append(src)
+                else:
+                    # Convert SourceInfo to dict
+                    sources_list.append({
+                        'document': src.document if hasattr(src, 'document') else str(src.get('document', 'unknown')),
+                        'score': str(src.score) if hasattr(src, 'score') and src.score else src.get('score', 'N/A'),
+                        'content_preview': src.content_preview if hasattr(src, 'content_preview') else src.get('content_preview', '')
+                    })
+            
+            # Add proactive image offer for cottage-specific queries (streaming)
+            should_offer, cottage_num = should_offer_images(request.question, full_answer)
+            if should_offer and cottage_num and not is_image_request:
+                image_offer = f"\n\n📷 **Would you like to see images of Cottage {cottage_num}?** Just say 'yes' or 'show images'."
+                full_answer += image_offer
+                # Store in session for "yes" handling
+                session_manager.set_session_data(request.session_id, "image_offer_cottage", cottage_num)
+                logger.info(f"Added image offer for Cottage {cottage_num} in stream")
+            
+            # Add booking nudge if enough info available (streaming)
+            if slot_manager.has_enough_booking_info():
+                recommendation_engine = get_recommendation_engine()
+                nudge = recommendation_engine.generate_booking_nudge(
+                    slot_manager.get_slots(), 
+                    context_tracker,
+                    intent
+                )
+                if nudge:
+                    full_answer += f"\n\n{nudge}"
+            
+            # Update chat history
+            chat_history.append(f"question: {refined_question}, answer: {full_answer}")
+            
+            # Generate follow-up actions
+            follow_up_actions = generate_follow_up_actions(
+                intent,
+                slot_manager.get_slots(),
+                request.question,
+                is_widget_query=is_widget_query
+            )
+            
+            # Send completion
+            completion_data = {
+                'type': 'done',
+                'answer': full_answer,
+                'sources': sources_list,
+                'cottage_images': cottage_image_urls,
+                'follow_up_actions': follow_up_actions
+            }
+            yield f"data: {json.dumps(completion_data)}\n\n"
+            
+        except Exception as e:
+            logger.error(f"Error in streaming endpoint: {e}", exc_info=True)
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Full traceback: {error_details}")
+            yield f"data: {json.dumps({'type': 'error', 'message': f'An error occurred: {str(e)}'})}\n\n"
+    
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/api/chat/clear", response_model=ClearSessionResponse)

@@ -13,11 +13,14 @@ if str(chatbot_dir) not in sys.path:
 # Import and run the main Streamlit app
 from rag_chatbot_app import main, get_args
 import argparse
+import os
 
 # Create default arguments for Streamlit Cloud
 # (Streamlit Cloud doesn't support command-line arguments)
+# Use FAST_MODEL_NAME from env (default: llama-3.1-8b-instant)
+fast_model_name = os.getenv("FAST_MODEL_NAME", "llama-3.1-8b-instant")
 default_args = argparse.Namespace(
-    model="llama-3.1-8b-instant",
+    model=fast_model_name,
     synthesis_strategy="create-and-refine",
     k=2,
     max_new_tokens=512,

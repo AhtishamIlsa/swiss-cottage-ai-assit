@@ -142,22 +142,6 @@ class RecommendationEngine:
         Returns:
             Booking nudge string or None
         """
-        # Only show booking nudge if user has asked about booking or availability
-        if context_tracker:
-            recent_intents = context_tracker.get_recent_intents(5)
-            has_booking_intent = IntentType.BOOKING in recent_intents
-            has_availability_intent = IntentType.AVAILABILITY in recent_intents
-            
-            # Only show if user has asked about booking/availability OR current intent is booking/availability
-            if intent:
-                should_show = (intent in [IntentType.BOOKING, IntentType.AVAILABILITY] or 
-                              has_booking_intent or has_availability_intent)
-            else:
-                should_show = has_booking_intent or has_availability_intent
-            
-            if not should_show:
-                return None  # Don't show booking nudge if user hasn't shown interest in booking
-        
         # Check if enough info for booking
         has_guests = slots.get("guests") is not None
         has_dates = slots.get("dates") is not None
@@ -165,6 +149,42 @@ class RecommendationEngine:
         
         # Need at least 2 out of 3 key slots
         filled_count = sum([has_guests, has_dates, has_room_type])
+        
+        # Relaxed intent requirement: If user has provided guests + cottage, they're likely ready
+        # Don't require explicit booking/availability intent if they have key information
+        should_show_nudge = False
+        
+        if context_tracker:
+            recent_intents = context_tracker.get_recent_intents(5)
+            has_booking_intent = IntentType.BOOKING in recent_intents
+            has_availability_intent = IntentType.AVAILABILITY in recent_intents
+            has_pricing_intent = IntentType.PRICING in recent_intents
+            
+            # Show nudge if:
+            # 1. User has explicit booking/availability intent, OR
+            # 2. User has guests + cottage (room_type) - they're exploring options, OR
+            # 3. User has asked about pricing (shows purchase intent)
+            if intent:
+                should_show_nudge = (
+                    intent in [IntentType.BOOKING, IntentType.AVAILABILITY, IntentType.PRICING] or 
+                    has_booking_intent or 
+                    has_availability_intent or
+                    has_pricing_intent or
+                    (filled_count >= 2 and has_guests and has_room_type)  # Guests + cottage = ready
+                )
+            else:
+                should_show_nudge = (
+                    has_booking_intent or 
+                    has_availability_intent or
+                    has_pricing_intent or
+                    (filled_count >= 2 and has_guests and has_room_type)  # Guests + cottage = ready
+                )
+        else:
+            # No context tracker - show if enough slots filled
+            should_show_nudge = filled_count >= 2
+        
+        if not should_show_nudge:
+            return None  # Don't show booking nudge
         
         if filled_count >= 2:
             nudge = "💡 **Ready to book?** "

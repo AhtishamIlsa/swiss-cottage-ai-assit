@@ -20,6 +20,7 @@
             this.isFullscreen = false;
             this.isLoading = false;
             this.messages = [];
+            this.lastQuestion = null;
             
             // Initialize
             this.initUI();
@@ -94,6 +95,16 @@
                 this.isFullscreen = true;
                 document.body.style.overflow = 'hidden';
                 
+                // Update button icon to minimize
+                if (fullscreenBtn) {
+                    fullscreenBtn.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>
+                        </svg>
+                    `;
+                    fullscreenBtn.setAttribute('aria-label', 'Minimize');
+                }
+                
                 // Force header visibility with inline styles
                 if (header) {
                     header.style.display = 'flex';
@@ -157,19 +168,9 @@
                     disclaimer.style.opacity = '1';
                 }
                 
-                // Update icon to restore
-                if (fullscreenBtn) {
-                    fullscreenBtn.innerHTML = `
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>
-                        </svg>
-                    `;
-                    fullscreenBtn.style.display = 'flex';
-                    fullscreenBtn.style.visibility = 'visible';
-                    fullscreenBtn.style.opacity = '1';
-                }
+                // Update button icon to minimize (already done above)
             } else {
-                // Exit fullscreen
+                // Exit fullscreen (minimize to small window)
                 chatWindow.classList.remove('chatbot-fullscreen');
                 widget.classList.remove('chatbot-fullscreen-active');
                 this.isFullscreen = false;
@@ -182,13 +183,14 @@
                     header.style.opacity = '1';
                 }
                 
-                // Update icon to fullscreen
+                // Update icon back to fullscreen (expand)
                 if (fullscreenBtn) {
                     fullscreenBtn.innerHTML = `
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                         </svg>
                     `;
+                    fullscreenBtn.setAttribute('aria-label', 'Fullscreen');
                 }
             }
         }
@@ -207,10 +209,25 @@
             }
         }
         
-        fillPromptFromCard(text) {
+        fillPromptFromCard(text, intent = null) {
+            // Map card prompts to optimized queries that trigger specific intents
+            const queryMap = {
+                "Check availability & book a cottage": "I want to check availability and book a cottage for my dates",
+                "View images of the cottages": "Show me images and photos of the cottages",
+                "Prices & cottage options": "What are the prices and cottage options? Compare weekday and weekend rates",
+                "Location & nearby attractions": "Tell me about the location and nearby attractions near Swiss Cottages Bhurban"
+            };
+            
+            // Use optimized query if available, otherwise use original text
+            const optimizedQuery = queryMap[text] || text;
+            
             const input = document.getElementById('chatbot-input');
             if (input) {
-                input.value = text;
+                input.value = optimizedQuery;
+                // Store intent in input data attribute for backend detection
+                if (intent) {
+                    input.setAttribute('data-intent', intent);
+                }
                 this.updateSendButton();
                 input.focus();
                 // Auto-resize textarea
@@ -266,7 +283,7 @@
                                     <polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polyline>
                                 </svg>
                             </div>
-                            <h3 class="chatbot-header-title">Swiss Cottages Assistant</h3>
+                            <h3 class="chatbot-header-title">Swiss AI Assistant</h3>
                         </div>
                         <div class="chatbot-header-actions">
                             <button id="chatbot-fullscreen" class="chatbot-icon-btn chatbot-fullscreen-btn" aria-label="Fullscreen">
@@ -306,25 +323,25 @@
                                 <h2 class="chatbot-welcome-title">How can I help you today?</h2>
                                 <p class="chatbot-welcome-description">I'm here to assist you with finding and booking the perfect cottage or room for your stay.</p>
                                 <div class="chatbot-suggestion-cards">
-                                    <div class="chatbot-suggestion-card" data-prompt="Check availability & book a cottage">
+                                    <div class="chatbot-suggestion-card" data-prompt="Check availability & book a cottage" data-intent="booking">
                                         <div class="chatbot-card-content">
                                             <div class="chatbot-card-title">Check availability & book a cottage</div>
                                             <div class="chatbot-card-subtitle">Select your dates and guests to see available cottages</div>
                                         </div>
                                     </div>
-                                    <div class="chatbot-suggestion-card" data-prompt="View images of the cottages">
+                                    <div class="chatbot-suggestion-card" data-prompt="View images of the cottages" data-intent="images">
                                         <div class="chatbot-card-content">
                                             <div class="chatbot-card-title">View images of the cottages</div>
                                             <div class="chatbot-card-subtitle">See real photos of bedrooms, lounges, views, and outdoor areas</div>
                                         </div>
                                     </div>
-                                    <div class="chatbot-suggestion-card" data-prompt="Prices & cottage options">
+                                    <div class="chatbot-suggestion-card" data-prompt="Prices & cottage options" data-intent="pricing">
                                         <div class="chatbot-card-content">
                                             <div class="chatbot-card-title">Prices & cottage options</div>
                                             <div class="chatbot-card-subtitle">Compare weekday and weekend prices for each cottage</div>
                                         </div>
                                     </div>
-                                    <div class="chatbot-suggestion-card" data-prompt="Location & nearby attractions">
+                                    <div class="chatbot-suggestion-card" data-prompt="Location & nearby attractions" data-intent="location">
                                         <div class="chatbot-card-content">
                                             <div class="chatbot-card-title">Location & nearby attractions</div>
                                             <div class="chatbot-card-subtitle">Find us near PC Bhurban and explore nearby spots</div>
@@ -339,7 +356,7 @@
                             <textarea 
                                 id="chatbot-input" 
                                 class="chatbot-input" 
-                                placeholder="Message Swiss Cottages Assistant..."
+                                placeholder="Message Swiss AI Assistant..."
                                 rows="1"
                                 autocomplete="off"
                             ></textarea>
@@ -351,7 +368,7 @@
                             </button>
                         </div>
                         <div class="chatbot-disclaimer">
-                            Swiss Cottages Assistant can make mistakes. Consider checking important information.
+                            Swiss AI Assistant can make mistakes. Consider checking important information.
                         </div>
                     </div>
                 </div>
@@ -382,8 +399,9 @@
             suggestionCards.forEach(card => {
                 card.addEventListener('click', () => {
                     const prompt = card.getAttribute('data-prompt');
+                    const intent = card.getAttribute('data-intent');
                     if (prompt) {
-                        this.fillPromptFromCard(prompt);
+                        this.fillPromptFromCard(prompt, intent);
                         // Auto-send the message from card
                         setTimeout(() => {
                             this.sendMessage();
@@ -501,12 +519,40 @@
             if (this.isOpen) {
                 chatWindow.style.display = 'flex';
                 
-                // Ensure header is visible
-                const header = chatWindow.querySelector('.chatbot-header');
-                if (header) {
-                    header.style.display = 'flex';
-                    header.style.visibility = 'visible';
-                    header.style.opacity = '1';
+                // Open in fullscreen by default (on desktop only)
+                if (!this.isMobileDevice()) {
+                    // Set fullscreen state
+                    this.isFullscreen = true;
+                    chatWindow.classList.add('chatbot-fullscreen');
+                    widget.classList.add('chatbot-fullscreen-active');
+                    document.body.style.overflow = 'hidden';
+                    
+                    // Update fullscreen button icon to minimize
+                    const fullscreenBtn = document.getElementById('chatbot-fullscreen');
+                    if (fullscreenBtn) {
+                        fullscreenBtn.innerHTML = `
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"></path>
+                            </svg>
+                        `;
+                        fullscreenBtn.setAttribute('aria-label', 'Minimize');
+                    }
+                    
+                    // Ensure all fullscreen elements are visible
+                    const header = chatWindow.querySelector('.chatbot-header');
+                    if (header) {
+                        header.style.display = 'flex';
+                        header.style.visibility = 'visible';
+                        header.style.opacity = '1';
+                    }
+                } else {
+                    // Mobile - ensure header is visible
+                    const header = chatWindow.querySelector('.chatbot-header');
+                    if (header) {
+                        header.style.display = 'flex';
+                        header.style.visibility = 'visible';
+                        header.style.opacity = '1';
+                    }
                 }
                 
                 // On mobile, ensure input and send button are visible and functional
@@ -551,6 +597,25 @@
             } else {
                 chatWindow.style.display = 'none';
                 widget.classList.remove('chatbot-open');
+                
+                // Reset fullscreen state when closing (desktop)
+                if (!this.isMobileDevice()) {
+                    chatWindow.classList.remove('chatbot-fullscreen');
+                    widget.classList.remove('chatbot-fullscreen-active');
+                    this.isFullscreen = false;
+                    document.body.style.overflow = '';
+                    
+                    // Reset fullscreen button icon
+                    const fullscreenBtn = document.getElementById('chatbot-fullscreen');
+                    if (fullscreenBtn) {
+                        fullscreenBtn.innerHTML = `
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                            </svg>
+                        `;
+                        fullscreenBtn.setAttribute('aria-label', 'Fullscreen');
+                    }
+                }
                 
                 // On mobile, remove fullscreen class when closing and restore site
                 if (this.isMobileDevice()) {
@@ -613,94 +678,119 @@
             
             let messageHTML = '';
             
-            // Add sources FIRST (like Streamlit) if available
-            if (sources && sources.length > 0) {
-                messageHTML += '<div class="chatbot-sources"><strong>Retrieved sources:</strong><ol>';
-                sources.forEach((source, index) => {
-                    const docName = source.document || 'Unknown source';
-                    // Extract just the filename if it's a full path
-                    const displayName = docName.split('/').pop().replace('.md', '') || docName;
-                    messageHTML += `<li>${displayName}`;
-                    if (source.score && source.score !== 'N/A') {
-                        messageHTML += ` <span class="chatbot-score">(score: ${source.score})</span>`;
-                    }
-                    messageHTML += `</li>`;
-                });
-                messageHTML += '</ol></div>';
-            }
+            // Sources removed - not displaying retrieved sources anymore
+            // if (sources && sources.length > 0) {
+            //     messageHTML += '<div class="chatbot-sources"><strong>Retrieved sources:</strong><ol>';
+            //     sources.forEach((source, index) => {
+            //         const docName = source.document || 'Unknown source';
+            //         const displayName = docName.split('/').pop().replace('.md', '') || docName;
+            //         messageHTML += `<li>${displayName}`;
+            //         if (source.score && source.score !== 'N/A') {
+            //             messageHTML += ` <span class="chatbot-score">(score: ${source.score})</span>`;
+            //         }
+            //         messageHTML += `</li>`;
+            //     });
+            //     messageHTML += '</ol></div>';
+            // }
             
             // Then add the answer content (like Streamlit)
             messageHTML += `<div class="chatbot-message-content">${this.formatMessage(content)}</div>`;
             
-            // Add images if available - create slider
-            if (images && Array.isArray(images) && images.length > 0) {
-                console.log('Creating image slider with', images.length, 'images');
-                console.log('API URL:', this.apiUrl);
-                
-                const sliderId = `chatbot-slider-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                messageHTML += `<div class="chatbot-image-slider" id="${sliderId}">`;
-                messageHTML += '<div class="chatbot-slider-container">';
-                images.forEach((imgUrl, index) => {
-                    if (!imgUrl) {
-                        console.warn(`Image URL at index ${index} is empty`);
-                        return;
-                    }
+            // Add images if available - create horizontal gallery
+            // Handle both array format (single cottage) and dict format (multiple cottages grouped)
+            if (images) {
+                // Check if images is a dictionary (grouped by cottage)
+                if (images && typeof images === 'object' && !Array.isArray(images)) {
+                    // Grouped by cottage - create separate gallery for each cottage
+                    console.log('Creating grouped image galleries for cottages:', Object.keys(images));
                     
-                    // Ensure URL is properly formatted
-                    let fullUrl = imgUrl;
-                    
-                    // If it's already a full URL, use it as is
-                    if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
-                        fullUrl = imgUrl;
-                    } 
-                    // If it starts with /, it's a relative path from API base
-                    else if (imgUrl.startsWith('/')) {
-                        // Remove trailing slash from apiUrl if present, then add the image path
-                        const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-                        fullUrl = `${baseUrl}${imgUrl}`;
-                    } 
-                    // Otherwise, treat as relative and add to API base
-                    else {
-                        const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
-                        fullUrl = `${baseUrl}${imgUrl}`;
-                    }
-                    
-                    console.log(`Image [${index}]: Original="${imgUrl}", Full="${fullUrl}"`);
-                    
-                    messageHTML += `<div class="chatbot-slide ${index === 0 ? 'active' : ''}">`;
-                    messageHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-slider-image" onload="console.log('✅ Image loaded successfully:', '${fullUrl}'); this.style.opacity='1';" onerror="console.error('❌ Failed to load image:', '${fullUrl}', 'Status:', this.naturalWidth, 'x', this.naturalHeight); const parent = this.closest('.chatbot-slide'); if (parent) { parent.innerHTML='<div style=\\'display:flex;align-items:center;justify-content:center;height:100%;color:#999;\\'>Image not available</div>'; }" loading="lazy" style="opacity:0;transition:opacity 0.3s;" />`;
-                    messageHTML += '</div>';
-                });
-                messageHTML += '</div>'; // slider-container
-                
-                // Navigation controls
-                if (images.length > 1) {
-                    messageHTML += '<button class="chatbot-slider-prev" aria-label="Previous image">‹</button>';
-                    messageHTML += '<button class="chatbot-slider-next" aria-label="Next image">›</button>';
-                    messageHTML += '<div class="chatbot-slider-dots">';
-                    images.forEach((_, index) => {
-                        messageHTML += `<span class="chatbot-slider-dot ${index === 0 ? 'active' : ''}" data-slide="${index}" aria-label="Go to image ${index + 1}"></span>`;
+                    // Sort cottage numbers to display in order (7, 9, 11)
+                    const cottageNumbers = Object.keys(images).sort((a, b) => {
+                        const numA = parseInt(a);
+                        const numB = parseInt(b);
+                        return numA - numB;
                     });
-                    messageHTML += '</div>'; // slider-dots
+                    
+                    cottageNumbers.forEach((cottageNum) => {
+                        const cottageImages = images[cottageNum];
+                        if (cottageImages && Array.isArray(cottageImages) && cottageImages.length > 0) {
+                            messageHTML += `<div class="chatbot-cottage-images-group">`;
+                            messageHTML += `<h4 class="chatbot-cottage-title">Cottage ${cottageNum}</h4>`;
+                            messageHTML += '<div class="chatbot-image-gallery">';
+                            
+                            cottageImages.forEach((imgUrl, index) => {
+                                if (!imgUrl) {
+                                    console.warn(`Image URL at index ${index} is empty for Cottage ${cottageNum}`);
+                                    return;
+                                }
+                                
+                                // Ensure URL is properly formatted
+                                let fullUrl = imgUrl;
+                                
+                                // If it's already a full URL, use it as is
+                                if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
+                                    fullUrl = imgUrl;
+                                } 
+                                // If it starts with /, it's a relative path from API base
+                                else if (imgUrl.startsWith('/')) {
+                                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
+                                    fullUrl = `${baseUrl}${imgUrl}`;
+                                } 
+                                // Otherwise, treat as relative and add to API base
+                                else {
+                                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
+                                    fullUrl = `${baseUrl}${imgUrl}`;
+                                }
+                                
+                                messageHTML += `<img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                            });
+                            
+                            messageHTML += '</div>'; // chatbot-image-gallery
+                            messageHTML += '</div>'; // chatbot-cottage-images-group
+                        }
+                    });
+                } else if (Array.isArray(images) && images.length > 0) {
+                    // Single array format (backward compatibility)
+                    console.log('Creating image gallery with', images.length, 'images');
+                    console.log('API URL:', this.apiUrl);
+                    
+                    messageHTML += '<div class="chatbot-image-gallery">';
+                    images.forEach((imgUrl, index) => {
+                        if (!imgUrl) {
+                            console.warn(`Image URL at index ${index} is empty`);
+                            return;
+                        }
+                        
+                        // Ensure URL is properly formatted
+                        let fullUrl = imgUrl;
+                        
+                        // If it's already a full URL, use it as is
+                        if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
+                            fullUrl = imgUrl;
+                        } 
+                        // If it starts with /, it's a relative path from API base
+                        else if (imgUrl.startsWith('/')) {
+                            // Remove trailing slash from apiUrl if present, then add the image path
+                            const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
+                            fullUrl = `${baseUrl}${imgUrl}`;
+                        } 
+                        // Otherwise, treat as relative and add to API base
+                        else {
+                            const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
+                            fullUrl = `${baseUrl}${imgUrl}`;
+                        }
+                        
+                        console.log(`Image [${index}]: Original="${imgUrl}", Full="${fullUrl}"`);
+                        
+                        messageHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                    });
+                    messageHTML += '</div>'; // chatbot-image-gallery
                 }
-                
-                messageHTML += '</div>'; // chatbot-image-slider
             }
             
             messageDiv.innerHTML = messageHTML;
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            // Initialize slider if images were added
-            if (images && images.length > 0) {
-                const slider = messageDiv.querySelector('.chatbot-image-slider');
-                if (slider && slider.id) {
-                    // Use setTimeout to ensure DOM is ready
-                    setTimeout(() => {
-                        this.initImageSlider(slider.id);
-                    }, 100);
-                }
-            }
             
             this.messages.push({ role, content });
         }
@@ -816,6 +906,83 @@
                 .replace(/🏡/g, '🏡');
         }
         
+        renderFollowUpActions(messageDiv, followUpActions) {
+            if (!followUpActions) return;
+            
+            // Create actions container
+            const actionsContainer = document.createElement('div');
+            actionsContainer.className = 'chatbot-follow-up-actions';
+            
+            // Add quick action buttons
+            if (followUpActions.quick_actions && followUpActions.quick_actions.length > 0) {
+                const quickActionsDiv = document.createElement('div');
+                quickActionsDiv.className = 'chatbot-quick-actions';
+                
+                followUpActions.quick_actions.forEach(action => {
+                    const button = document.createElement('button');
+                    button.className = 'chatbot-quick-action-btn';
+                    button.textContent = action.text;
+                    button.setAttribute('data-action', action.action);
+                    button.setAttribute('type', 'button');
+                    
+                    // Handle button click
+                    button.addEventListener('click', () => {
+                        this.handleQuickAction(action);
+                    });
+                    
+                    quickActionsDiv.appendChild(button);
+                });
+                
+                actionsContainer.appendChild(quickActionsDiv);
+            }
+            
+            // Add suggestion chips
+            if (followUpActions.suggestions && followUpActions.suggestions.length > 0) {
+                const suggestionsDiv = document.createElement('div');
+                suggestionsDiv.className = 'chatbot-suggestions';
+                
+                followUpActions.suggestions.forEach(suggestion => {
+                    const chip = document.createElement('button');
+                    chip.className = 'chatbot-suggestion-chip';
+                    chip.textContent = suggestion;
+                    chip.setAttribute('type', 'button');
+                    
+                    // Handle chip click
+                    chip.addEventListener('click', () => {
+                        this.fillPromptFromCard(suggestion);
+                        setTimeout(() => {
+                            this.sendMessage();
+                        }, 100);
+                    });
+                    
+                    suggestionsDiv.appendChild(chip);
+                });
+                
+                actionsContainer.appendChild(suggestionsDiv);
+            }
+            
+            // Append to message div
+            if (actionsContainer.children.length > 0) {
+                messageDiv.appendChild(actionsContainer);
+            }
+        }
+        
+        handleQuickAction(action) {
+            const actionMap = {
+                'booking': 'I want to check availability and book a cottage',
+                'contact': 'How can I contact the manager?',
+                'pricing': 'What are the prices and cottage options?',
+                'availability': 'Check availability for my dates',
+                'images': 'Show me images of the cottages'
+            };
+            
+            const query = actionMap[action.action] || action.text;
+            this.fillPromptFromCard(query);
+            setTimeout(() => {
+                this.sendMessage();
+            }, 100);
+        }
+        
         showLoading() {
             const messagesContainer = document.getElementById('chatbot-messages');
             const loadingDiv = document.createElement('div');
@@ -835,9 +1002,148 @@
             this.isLoading = false;
         }
         
-        async sendMessage() {
+        showSearching(message = 'Searching...') {
+            const messagesContainer = document.getElementById('chatbot-messages');
+            let searchingDiv = document.getElementById('chatbot-searching');
+            
+            if (!searchingDiv) {
+                searchingDiv = document.createElement('div');
+                searchingDiv.id = 'chatbot-searching';
+                searchingDiv.className = 'chatbot-message chatbot-message-assistant chatbot-searching';
+                searchingDiv.innerHTML = `
+                    <div class="chatbot-message-content">
+                        <span class="chatbot-searching-text">${message}</span>
+                        <span class="chatbot-searching-dots">
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                        </span>
+                    </div>
+                `;
+                messagesContainer.appendChild(searchingDiv);
+            } else {
+                const textSpan = searchingDiv.querySelector('.chatbot-searching-text');
+                if (textSpan) {
+                    textSpan.textContent = message;
+                }
+                searchingDiv.style.display = 'flex';
+            }
+            
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+        
+        hideSearching() {
+            const searchingDiv = document.getElementById('chatbot-searching');
+            if (searchingDiv) {
+                searchingDiv.remove();
+            }
+        }
+        
+        createSourcesDiv(sources) {
+            const sourcesDiv = document.createElement('div');
+            sourcesDiv.className = 'chatbot-sources';
+            let html = '<strong>Retrieved sources:</strong><ol>';
+            sources.forEach((source) => {
+                const docName = source.document || source.document || 'Unknown source';
+                const displayName = docName.split('/').pop().replace('.md', '') || docName;
+                html += `<li>${displayName}`;
+                if (source.score && source.score !== 'N/A') {
+                    html += ` <span class="chatbot-score">(score: ${source.score})</span>`;
+                }
+                html += `</li>`;
+            });
+            html += '</ol>';
+            sourcesDiv.innerHTML = html;
+            return sourcesDiv;
+        }
+        
+        addImagesToMessage(messageDiv, images) {
+            if (!images) return;
+            
+            // Handle grouped images (dict format) - multiple cottages
+            if (images && typeof images === 'object' && !Array.isArray(images)) {
+                // Grouped by cottage - create separate gallery for each cottage
+                console.log('Adding grouped image galleries for cottages:', Object.keys(images));
+                
+                // Sort cottage numbers to display in order (7, 9, 11)
+                const cottageNumbers = Object.keys(images).sort((a, b) => {
+                    const numA = parseInt(a);
+                    const numB = parseInt(b);
+                    return numA - numB;
+                });
+                
+                let groupedHTML = '';
+                cottageNumbers.forEach((cottageNum) => {
+                    const cottageImages = images[cottageNum];
+                    if (cottageImages && Array.isArray(cottageImages) && cottageImages.length > 0) {
+                        groupedHTML += `<div class="chatbot-cottage-images-group">`;
+                        groupedHTML += `<h4 class="chatbot-cottage-title">Cottage ${cottageNum}</h4>`;
+                        groupedHTML += '<div class="chatbot-image-gallery">';
+                        
+                        cottageImages.forEach((imgUrl, index) => {
+                            if (!imgUrl) {
+                                console.warn(`Image URL at index ${index} is empty for Cottage ${cottageNum}`);
+                                return;
+                            }
+                            
+                            // Ensure URL is properly formatted
+                            let fullUrl = imgUrl;
+                            
+                            // If it's already a full URL, use it as is
+                            if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
+                                fullUrl = imgUrl;
+                            } 
+                            // If it starts with /, it's a relative path from API base
+                            else if (imgUrl.startsWith('/')) {
+                                const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
+                                fullUrl = `${baseUrl}${imgUrl}`;
+                            } 
+                            // Otherwise, treat as relative and add to API base
+                            else {
+                                const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
+                                fullUrl = `${baseUrl}${imgUrl}`;
+                            }
+                            
+                            groupedHTML += `<img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                        });
+                        
+                        groupedHTML += '</div>'; // chatbot-image-gallery
+                        groupedHTML += '</div>'; // chatbot-cottage-images-group
+                    }
+                });
+                
+                messageDiv.insertAdjacentHTML('beforeend', groupedHTML);
+                return;
+            }
+            
+            // Handle single array format (backward compatibility)
+            if (!Array.isArray(images) || images.length === 0) return;
+            
+            let galleryHTML = '<div class="chatbot-image-gallery">';
+            images.forEach((imgUrl, index) => {
+                if (!imgUrl) return;
+                
+                let fullUrl = imgUrl;
+                if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
+                    fullUrl = imgUrl;
+                } else if (imgUrl.startsWith('/')) {
+                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
+                    fullUrl = `${baseUrl}${imgUrl}`;
+                } else {
+                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
+                    fullUrl = `${baseUrl}${imgUrl}`;
+                }
+                
+                galleryHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+            });
+            galleryHTML += '</div>';
+            
+            messageDiv.insertAdjacentHTML('beforeend', galleryHTML);
+        }
+        
+        async sendMessage(questionOverride = null) {
             const input = document.getElementById('chatbot-input');
-            const question = input.value.trim();
+            const question = questionOverride || input.value.trim();
             
             if (!question || this.isLoading) {
                 return;
@@ -851,11 +1157,34 @@
             // Add user message
             this.addMessage('user', question);
             
-            // Show loading
-            this.showLoading();
+            // Create assistant message container for streaming
+            const messagesContainer = document.getElementById('chatbot-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'chatbot-message chatbot-message-assistant chatbot-streaming';
+            
+            // Show thinking indicator immediately
+            const thinkingIndicator = document.createElement('div');
+            thinkingIndicator.className = 'chatbot-thinking-indicator';
+            thinkingIndicator.innerHTML = '<span class="chatbot-thinking-dots"><span></span><span></span><span></span></span><span class="chatbot-thinking-text">Thinking...</span>';
+            messageDiv.appendChild(thinkingIndicator);
+            
+            // Create content div (hidden initially)
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'chatbot-message-content';
+            contentDiv.style.display = 'none';
+            messageDiv.appendChild(contentDiv);
+            
+            messagesContainer.appendChild(messageDiv);
+            let fullAnswer = '';
+            let sources = null; // Keep for reference but don't display
+            let images = null;
+            let progressBar = null;
+            let typingIndicator = null;
+            let lastScrollTime = 0;
             
             try {
-                const response = await fetch(`${this.apiUrl}/api/chat`, {
+                // Use streaming endpoint
+                const response = await fetch(`${this.apiUrl}/api/chat/stream`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -880,33 +1209,185 @@
                     throw new Error(errorDetail);
                 }
                 
-                const data = await response.json();
+                // Hide searching indicator
+                this.hideSearching();
                 
-                // Debug: Log the response to see what we're getting
-                console.log('API Response:', data);
-                console.log('Cottage images:', data.cottage_images);
+                // Read stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
                 
-                // Hide loading
-                this.hideLoading();
-                
-                // Add assistant response
-                this.addMessage(
-                    'assistant',
-                    data.answer,
-                    data.sources,
-                    data.cottage_images || null
-                );
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                if (data.type === 'searching') {
+                                    // Update searching message
+                                    this.showSearching(data.message || 'Searching...');
+                                }
+                                else if (data.type === 'hide_searching') {
+                                    // Hide searching message (when fallback is shown)
+                                    this.hideSearching();
+                                }
+                                else if (data.type === 'sources_found') {
+                                    // Hide searching - sources are no longer displayed
+                                    this.hideSearching();
+                                    sources = data.sources; // Store for reference but don't display
+                                    // Sources display removed - not showing retrieved sources anymore
+                                }
+                                else if (data.type === 'typing') {
+                                    // Remove thinking indicator when typing starts
+                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                    if (thinkingIndicator) {
+                                        thinkingIndicator.remove();
+                                        contentDiv.style.display = 'block';
+                                    }
+                                    
+                                    // Show typing indicator
+                                    if (!typingIndicator) {
+                                        typingIndicator = document.createElement('div');
+                                        typingIndicator.className = 'chatbot-typing-indicator';
+                                        typingIndicator.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+                                        messageDiv.insertBefore(typingIndicator, contentDiv);
+                                    }
+                                }
+                                else if (data.type === 'token') {
+                                    // Remove thinking indicator when first token arrives
+                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                    if (thinkingIndicator) {
+                                        thinkingIndicator.remove();
+                                        contentDiv.style.display = 'block';
+                                    }
+                                    
+                                    // Remove typing indicator when first token arrives
+                                    if (typingIndicator) {
+                                        typingIndicator.remove();
+                                        typingIndicator = null;
+                                    }
+                                    
+                                    // Sources are no longer displayed - removed
+                                    
+                                    // Append token to answer
+                                    fullAnswer += data.chunk;
+                                    contentDiv.innerHTML = this.formatMessage(fullAnswer) + '<span class="chatbot-cursor">▌</span>';
+                                    
+                                    // Smooth auto-scroll (throttled)
+                                    const now = Date.now();
+                                    if (now - lastScrollTime > 50) { // Scroll every 50ms max
+                                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                        lastScrollTime = now;
+                                    }
+                                }
+                                else if (data.type === 'progress') {
+                                    // Update progress bar
+                                    if (!progressBar) {
+                                        progressBar = document.createElement('div');
+                                        progressBar.className = 'chatbot-progress-bar';
+                                        progressBar.innerHTML = '<div class="chatbot-progress-fill"></div>';
+                                        messageDiv.insertBefore(progressBar, contentDiv);
+                                    }
+                                    const progressFill = progressBar.querySelector('.chatbot-progress-fill');
+                                    if (progressFill) {
+                                        progressFill.style.width = `${data.progress}%`;
+                                    }
+                                }
+                                else if (data.type === 'done') {
+                                    // Remove thinking indicator if still showing
+                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                    if (thinkingIndicator) {
+                                        thinkingIndicator.remove();
+                                        contentDiv.style.display = 'block';
+                                    }
+                                    
+                                    // Remove cursor and typing indicator
+                                    if (typingIndicator) {
+                                        typingIndicator.remove();
+                                    }
+                                    contentDiv.innerHTML = this.formatMessage(fullAnswer);
+                                    
+                                    // Hide progress bar
+                                    if (progressBar) {
+                                        progressBar.remove();
+                                    }
+                                    
+                                    // Sources are no longer displayed - removed
+                                    // if (data.sources && !sources) {
+                                    //     sources = data.sources;
+                                    //     if (sources && sources.length > 0) {
+                                    //         sourcesDiv = this.createSourcesDiv(sources);
+                                    //         messageDiv.insertBefore(sourcesDiv, contentDiv);
+                                    //     }
+                                    // }
+                                    
+                                    // Add images if available
+                                    if (data.cottage_images) {
+                                        images = data.cottage_images;
+                                        this.addImagesToMessage(messageDiv, images);
+                                    }
+                                    
+                                    // Add follow-up actions if available
+                                    if (data.follow_up_actions) {
+                                        this.renderFollowUpActions(messageDiv, data.follow_up_actions);
+                                    }
+                                    
+                                    messageDiv.classList.remove('chatbot-streaming');
+                                    this.messages.push({ role: 'assistant', content: fullAnswer });
+                                    
+                                    // Final scroll
+                                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                }
+                                else if (data.type === 'error') {
+                                    throw new Error(data.message);
+                                }
+                            } catch (e) {
+                                console.error('Error parsing SSE data:', e, line);
+                            }
+                        }
+                    }
+                }
                 
             } catch (error) {
                 console.error('Error sending message:', error);
-                this.hideLoading();
+                this.hideSearching();
                 
-                // Show more detailed error message
-                let errorMsg = 'Sorry, I encountered an error. Please try again later.';
-                if (error.message) {
-                    errorMsg += `\n\nError: ${error.message}`;
-                }
-                this.addMessage('assistant', errorMsg);
+                // Remove any indicators
+                const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                if (thinkingIndicator) thinkingIndicator.remove();
+                if (typingIndicator) typingIndicator.remove();
+                if (progressBar) progressBar.remove();
+                
+                // Show error with retry button
+                const errorMsg = 'Sorry, I encountered an error. Please try again.';
+                contentDiv.style.display = 'block';
+                contentDiv.innerHTML = this.formatMessage(errorMsg);
+                messageDiv.classList.remove('chatbot-streaming');
+                
+                // Store question for retry
+                this.lastQuestion = question;
+                
+                // Add retry button
+                const retryBtn = document.createElement('button');
+                retryBtn.className = 'chatbot-retry-btn';
+                retryBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M3 21v-5h5"></path></svg> Retry';
+                retryBtn.onclick = () => {
+                    messageDiv.remove();
+                    if (this.lastQuestion) {
+                        const input = document.getElementById('chatbot-input');
+                        input.value = this.lastQuestion;
+                        this.updateSendButton();
+                        this.sendMessage();
+                    }
+                };
+                messageDiv.appendChild(retryBtn);
             }
         }
     }

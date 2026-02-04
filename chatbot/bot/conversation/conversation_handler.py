@@ -105,6 +105,7 @@ def answer_with_context(
     chat_history: ChatHistory,
     retrieved_contents: list[Document],
     max_new_tokens: int = 512,
+    use_simple_prompt: bool = False,
 ):
     """
     Generates an answer to the given question using a context synthesis strategy and retrieved contents.
@@ -140,15 +141,31 @@ def answer_with_context(
                 # If we have a running loop, we need to use nest_asyncio
                 from bot.conversation.ctx_strategy import _ensure_nest_asyncio
                 _ensure_nest_asyncio()
-                result = loop.run_until_complete(
-                    ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens)
-                )
+                # Check if strategy supports use_simple_prompt
+                import inspect
+                sig = inspect.signature(ctx_synthesis_strategy.generate_response)
+                if 'use_simple_prompt' in sig.parameters:
+                    result = loop.run_until_complete(
+                        ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens, use_simple_prompt=use_simple_prompt)
+                    )
+                else:
+                    result = loop.run_until_complete(
+                        ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens)
+                    )
             except RuntimeError:
                 # No running loop, create a new one
                 loop = get_event_loop()
-                result = loop.run_until_complete(
-                    ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens)
-                )
+                # Check if strategy supports use_simple_prompt
+                import inspect
+                sig = inspect.signature(ctx_synthesis_strategy.generate_response)
+                if 'use_simple_prompt' in sig.parameters:
+                    result = loop.run_until_complete(
+                        ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens, use_simple_prompt=use_simple_prompt)
+                    )
+                else:
+                    result = loop.run_until_complete(
+                        ctx_synthesis_strategy.generate_response(retrieved_contents, question, max_new_tokens=max_new_tokens)
+                    )
             
             # Ensure result is a tuple - check if it's still a coroutine (shouldn't happen)
             if hasattr(result, '__await__'):
@@ -185,9 +202,17 @@ def answer_with_context(
     else:
         # Non-async strategies (create-and-refine, tree-summarization)
         try:
-            result = ctx_synthesis_strategy.generate_response(
-            retrieved_contents, question, max_new_tokens=max_new_tokens
-        )
+            # Check if strategy supports use_simple_prompt parameter
+            import inspect
+            sig = inspect.signature(ctx_synthesis_strategy.generate_response)
+            if 'use_simple_prompt' in sig.parameters:
+                result = ctx_synthesis_strategy.generate_response(
+                    retrieved_contents, question, max_new_tokens=max_new_tokens, use_simple_prompt=use_simple_prompt
+                )
+            else:
+                result = ctx_synthesis_strategy.generate_response(
+                    retrieved_contents, question, max_new_tokens=max_new_tokens
+                )
             # Ensure result is a tuple
             if isinstance(result, tuple):
                 streamer, fmt_prompts = result

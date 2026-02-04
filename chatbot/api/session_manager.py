@@ -27,6 +27,7 @@ class SessionManager:
         self._sessions: Dict[str, ChatHistory] = {}
         self._slot_managers: Dict[str, SlotManager] = {}
         self._context_trackers: Dict[str, ContextTracker] = {}
+        self._session_data: Dict[str, Dict[str, Any]] = {}  # Store additional session data
         self._lock = threading.Lock()
     
     def get_or_create_session(self, session_id: str, total_length: int = 2) -> ChatHistory:
@@ -101,6 +102,9 @@ class SessionManager:
             if session_id in self._context_trackers:
                 self._context_trackers[session_id].clear()
                 cleared = True
+            if session_id in self._session_data:
+                self._session_data[session_id].clear()
+                cleared = True
             return cleared
     
     def delete_session(self, session_id: str) -> bool:
@@ -124,7 +128,48 @@ class SessionManager:
             if session_id in self._context_trackers:
                 del self._context_trackers[session_id]
                 deleted = True
+            if session_id in self._session_data:
+                del self._session_data[session_id]
+                deleted = True
             return deleted
+    
+    def get_session_data(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get additional session data.
+        
+        Args:
+            session_id: Session ID
+            
+        Returns:
+            Dictionary with session data or None if session doesn't exist
+        """
+        with self._lock:
+            return self._session_data.get(session_id)
+    
+    def set_session_data(self, session_id: str, key: str, value: Any) -> None:
+        """
+        Set a value in session data.
+        
+        Args:
+            session_id: Session ID
+            key: Data key
+            value: Data value
+        """
+        with self._lock:
+            if session_id not in self._session_data:
+                self._session_data[session_id] = {}
+            self._session_data[session_id][key] = value
+    
+    def clear_session_data(self, session_id: str) -> None:
+        """
+        Clear all session data for a session.
+        
+        Args:
+            session_id: Session ID
+        """
+        with self._lock:
+            if session_id in self._session_data:
+                self._session_data[session_id].clear()
 
 
 # Global session manager instance

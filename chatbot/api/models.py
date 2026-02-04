@@ -35,6 +35,14 @@ class SourceInfo(BaseModel):
         )
 
 
+class FollowUpAction(BaseModel):
+    """Follow-up action button model."""
+    
+    text: str = Field(..., description="Button text")
+    action: str = Field(..., description="Action type (booking, contact, pricing, etc.)")
+    type: str = Field(default="button", description="Action type: button or suggestion")
+
+
 class ChatResponse(BaseModel):
     """Response model for chat endpoint."""
     
@@ -42,7 +50,8 @@ class ChatResponse(BaseModel):
     sources: List[SourceInfo] = Field(default_factory=list, description="Retrieved source documents")
     intent: str = Field(..., description="Detected intent type")
     session_id: str = Field(..., description="Session ID")
-    cottage_images: Optional[List[str]] = Field(None, description="Cottage image URLs if requested")
+    cottage_images: Optional[Any] = Field(None, description="Cottage image URLs if requested. Can be List[str] for single cottage or Dict[str, List[str]] for multiple cottages grouped by cottage number")
+    follow_up_actions: Optional[Dict[str, Any]] = Field(None, description="Follow-up actions with quick_actions (buttons) and suggestions (text chips)")
 
 
 class HealthResponse(BaseModel):
