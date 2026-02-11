@@ -118,12 +118,26 @@ Note: Group size not specified in question. Please provide number of guests for 
                 if group_size <= 6:
                     recommendation = f"✅ RECOMMENDATION: Any cottage (Cottage 7, 9, or 11) is suitable for your group of {group_size} guests at base price. Cottage 9 and Cottage 11 are 3-bedroom cottages with more space, ideal for families."
                     answer_text = f"✅ YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) at base price. All cottages can accommodate up to 6 guests comfortably."
+                    direct_answer = answer_text
                 elif group_size <= 9:
-                    recommendation = f"✅ RECOMMENDATION: Any cottage (Cottage 7, 9, or 11) can accommodate your group of {group_size} guests with prior confirmation and adjusted pricing. Cottage 9 and Cottage 11 are 3-bedroom cottages with more space, ideal for larger groups."
-                    answer_text = f"✅ YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) with prior confirmation and adjusted pricing. All cottages have a maximum capacity of 9 guests per cottage."
+                    recommendation = f"✅ RECOMMENDATION: Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for your group of {group_size} guests. They can accommodate your group with prior confirmation and adjusted pricing. Cottage 7 (2-bedroom) can also accommodate {group_size} guests, but Cottages 9 and 11 offer more space for larger groups."
+                    answer_text = f"✅ YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) with prior confirmation and adjusted pricing. Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for larger groups. All cottages have a maximum capacity of 9 guests per cottage."
+                    direct_answer = answer_text
                 else:
                     recommendation = "❌ RECOMMENDATION: Your group exceeds the maximum capacity of 9 guests per cottage. You will need to book multiple cottages. Contact the manager to arrange multiple cottage bookings."
                     answer_text = f"❌ NO, your group of {group_size} guests exceeds the maximum capacity of 9 guests per cottage. You must book multiple cottages."
+                    direct_answer = answer_text
+                
+                # Determine which cottages to recommend based on group size
+                if group_size <= 6:
+                    suitable_cottages = "Cottage 7, 9, or 11"
+                    next_steps = "To recommend the best cottage for your stay, please share your check-in and check-out dates and any preferences you have."
+                elif group_size <= 9:
+                    suitable_cottages = "Cottages 9 and 11 (3-bedroom cottages with more space, ideal for larger groups). Cottage 7 (2-bedroom) can also accommodate your group."
+                    next_steps = "To recommend the best cottage for your stay, please share your check-in and check-out dates and any preferences you have."
+                else:
+                    suitable_cottages = "Multiple cottages required"
+                    next_steps = "Contact the manager to arrange multiple cottage bookings."
                 
                 answer_template = f"""
 STRUCTURED CAPACITY ANALYSIS FOR USER QUESTION:
@@ -133,8 +147,9 @@ DIRECT ANSWER (USE THIS EXACTLY):
 {answer_text}
 
 DETAILED ANALYSIS:
-Group Size: {group_size} guests
+Group Size: {group_size} guests (ALREADY PROVIDED - DO NOT ASK FOR GROUP SIZE AGAIN)
 Cottage: Not specified - user asking which cottage is best
+Suitable Cottages: {suitable_cottages}
 General Capacity Rules:
 - Base capacity: 6 guests per cottage (comfortable at base price)
 - Maximum capacity: 9 guests per cottage (with prior confirmation and adjusted pricing)
@@ -144,7 +159,15 @@ General Capacity Rules:
 RECOMMENDATION (USE THIS IN YOUR ANSWER):
 {recommendation}
 
-CRITICAL: When answering "which cottage is best for X people", use the RECOMMENDATION above. Do NOT say "no suitable cottage" if the recommendation says "any cottage" is suitable.
+NEXT STEPS (ASK FOR MISSING INFORMATION ONLY):
+{next_steps}
+
+CRITICAL INSTRUCTIONS:
+- Use the DIRECT ANSWER above FIRST in your response
+- Group size ({group_size} guests) is ALREADY KNOWN - DO NOT ask for group size again
+- Only ask for missing information: dates and preferences
+- Do NOT say "share your dates, number of guests, and preferences" - group size is already provided
+- Do NOT say "no suitable cottage" if the recommendation says cottages are suitable
 """
                 return {
                     "suitable": group_size <= 9,  # Suitable if within max limit
@@ -186,13 +209,21 @@ CRITICAL: When answering "which cottage is best for X people", use the RECOMMEND
         # Create detailed comparison
         if group_size <= base_capacity:
             comparison = f"{group_size} ≤ {base_capacity} base capacity = SUITABLE (comfortable at base price)"
+            direct_answer = f"✅ YES, your group of {group_size} guests can stay in Cottage {cottage_number} comfortably at base price. Cottage {cottage_number} can accommodate up to {base_capacity} guests at base price."
         elif group_size <= max_capacity:
             comparison = f"{group_size} ≤ {max_capacity} max capacity = SUITABLE (requires prior confirmation and adjusted pricing)"
+            direct_answer = f"✅ YES, your group of {group_size} guests can stay in Cottage {cottage_number} with prior confirmation and adjusted pricing. Cottage {cottage_number} can accommodate up to {max_capacity} guests maximum."
         else:
             comparison = f"{group_size} > {max_capacity} max capacity = NOT SUITABLE (must book multiple cottages)"
+            direct_answer = f"❌ NO, your group of {group_size} guests exceeds the maximum capacity of {max_capacity} guests for Cottage {cottage_number}. For comfort, safety, and community guidelines, groups exceeding {max_capacity} guests must book multiple cottages."
         
         answer_template = f"""
 STRUCTURED CAPACITY ANALYSIS:
+
+🚨 DIRECT ANSWER (USE THIS EXACTLY):
+{direct_answer}
+
+DETAILED ANALYSIS:
 Group Size: {group_size} guests
 Cottage: {cottage_number} ({bedrooms}-bedroom)
 Base Capacity: {base_capacity} guests
@@ -235,8 +266,11 @@ Reason: {reason}
         # Create a new document with capacity analysis
         from entities.document import Document
         
+        # No truncation - use full template
+        answer_template = capacity_result["answer_template"]
+        
         capacity_doc = Document(
-            page_content=capacity_result["answer_template"],
+            page_content=answer_template,
             metadata={
                 "source": "structured_capacity_analysis",
                 "type": "capacity_analysis",

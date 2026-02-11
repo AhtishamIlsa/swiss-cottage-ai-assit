@@ -6,7 +6,7 @@ models/*.pt
 models/*.pth
 
 # Vector store database files
-# vector_store/
+vector_store/
 vector_store_backup*/
 # *.sqlite3
 # *.db
@@ -35,6 +35,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+
+# FAQ documentation files (generated)
+docs/faq/
 
 # Lock files (Excel, LibreOffice, etc.)
 .~lock.*

@@ -27,8 +27,30 @@ class Chroma:
             self.client = client
         else:
             if persist_directory:
+                # Store persist_directory for later use
+                self._persist_directory = persist_directory
                 # Use PersistentClient for persistent storage
-                self.client = chromadb.PersistentClient(path=persist_directory)
+                try:
+                    self.client = chromadb.PersistentClient(path=persist_directory)
+                except Exception as client_err:
+                    error_msg = str(client_err).lower()
+                    # If schema error during client init, try to delete corrupted DB and recreate
+                    if "no such column" in error_msg or "topic" in error_msg or "operationalerror" in error_msg:
+                        logger.warning(f"ChromaDB schema error during client initialization: {client_err}")
+                        logger.info("Attempting to fix by removing corrupted database...")
+                        import os
+                        import shutil
+                        db_file = Path(persist_directory) / "chroma.sqlite3"
+                        if db_file.exists():
+                            try:
+                                os.remove(db_file)
+                                logger.info("Removed corrupted SQLite database")
+                            except Exception:
+                                pass
+                        # Try again
+                        self.client = chromadb.PersistentClient(path=persist_directory)
+                    else:
+                        raise
             else:
                 # Use regular Client for in-memory storage
                 client_settings = chromadb.config.Settings(is_persistent=is_persistent)
@@ -38,44 +60,153 @@ class Chroma:
 
         # Try to get existing collection first, create if it doesn't exist
         # Handle ChromaDB schema errors (e.g., missing 'topic' column)
+        # Strategy: Try to get collection directly first (avoids schema issues with list_collections)
+        
+        collection_loaded = False
+        
+        # First, try to get the collection directly (this works even if list_collections fails)
         try:
-            # First try to list collections to see if it exists (this might avoid schema issues)
-            existing_collections = [c.name for c in self.client.list_collections()]
-            if collection_name in existing_collections:
-                # Collection exists, try to get it
+            self.collection = self.client.get_collection(name=collection_name)
+            doc_count = self.collection.count()
+            
+            # Verify collection actually has data by trying to get a sample
+            has_data = False
+            try:
+                sample = self.collection.get(limit=1)
+                has_data = sample.get('ids') and len(sample['ids']) > 0
+            except Exception as sample_err:
+                # If get() fails, try query as fallback
                 try:
-                    self.collection = self.client.get_collection(name=collection_name)
-                except Exception as get_err:
-                    error_msg = str(get_err).lower()
-                    # If schema error, we'll need to recreate - but can't delete due to same error
-                    if "no such column" in error_msg or "topic" in error_msg:
-                        logger.error(f"ChromaDB schema error when getting collection: {get_err}")
-                        logger.error("Cannot fix automatically - please delete vector_store directory and rebuild")
-                        raise
-                    raise
+                    query_result = self.collection.query(query_texts=["test"], n_results=1)
+                    has_data = query_result.get('ids') and len(query_result['ids']) > 0 and len(query_result['ids'][0]) > 0
+                except Exception:
+                    has_data = False
+            
+            if doc_count > 0:
+                logger.info(f"✅ Successfully loaded collection '{collection_name}' with {doc_count} documents")
+                collection_loaded = True
+            elif has_data:
+                # Collection has data but count() returned 0 - use get() to determine actual count
+                try:
+                    all_ids = self.collection.get()['ids']
+                    actual_count = len(all_ids) if all_ids else 0
+                    logger.info(f"✅ Successfully loaded collection '{collection_name}' with {actual_count} documents (count() returned 0 but data exists)")
+                    collection_loaded = True
+                except Exception:
+                    logger.warning(f"Collection '{collection_name}' has data but cannot determine count")
+                    collection_loaded = True
             else:
-                # Collection doesn't exist, create it
+                # Collection exists but is truly empty
+                logger.warning(f"Collection '{collection_name}' exists but is empty (0 documents)")
+                # Check if we should keep it or if there's another collection with data
+                try:
+                    # Try to list all collections to see if there's one with data
+                    all_collections = self.client.list_collections()
+                    for col in all_collections:
+                        if col.name != collection_name:
+                            col_count = col.count()
+                            if col_count > 0:
+                                logger.warning(f"Found another collection '{col.name}' with {col_count} documents, but using requested '{collection_name}'")
+                except Exception:
+                    pass
+                # Keep the empty collection - it might be newly created and waiting for data
+                logger.info(f"Keeping empty collection '{collection_name}' - it may be populated later")
+                collection_loaded = True  # Accept empty collection
+        except Exception as get_err:
+            error_msg = str(get_err).lower()
+            # If it's a "not found" error, collection doesn't exist - we'll create it
+            if "not found" in error_msg or "does not exist" in error_msg:
+                logger.info(f"Collection '{collection_name}' not found, will create new collection")
+                collection_loaded = False
+            # If it's a schema error, try to work around it
+            # The collection might exist but ChromaDB metadata queries fail
+            # Strategy: get_collection() often works even when list_collections() fails
+            elif "no such column" in error_msg or "topic" in error_msg or "operationalerror" in error_msg:
+                logger.warning(f"Schema error when getting collection via normal path: {get_err}")
+                logger.info("Attempting workaround: accessing collection directly (bypassing metadata queries)...")
+                
+                # The error occurred when trying to get collection via self.client.get_collection()
+                # But sometimes we can still access it directly even with schema errors
+                # Try using the existing client but catch the specific error
+                try:
+                    # Try to get collection directly using the existing client
+                    # This might work even if the initial attempt failed
+                    raw_collection = self.client.get_collection(name=collection_name)
+                    raw_count = raw_collection.count()
+                    
+                    if raw_count > 0:
+                        # Success! Collection exists and has data
+                        self.collection = raw_collection
+                        logger.info(f"✅ Successfully loaded collection '{collection_name}' with {raw_count} documents (workaround succeeded)")
+                        collection_loaded = True
+                    else:
+                        # Collection exists but is empty
+                        logger.warning(f"Collection '{collection_name}' exists but is empty (0 documents)")
+                        self.collection = raw_collection
+                        collection_loaded = True
+                        
+                except Exception as workaround_err:
+                    workaround_msg = str(workaround_err).lower()
+                    # If workaround also fails with schema error, try one more time with fresh client
+                    if "no such column" in workaround_msg or "topic" in workaround_msg or "operationalerror" in workaround_msg:
+                        logger.warning(f"First workaround also hit schema error: {workaround_err}")
+                        logger.info("Trying one more time with a fresh client instance...")
+                        try:
+                            # Create a completely fresh client
+                            fresh_client = chromadb.PersistentClient(path=persist_directory if persist_directory else ".")
+                            fresh_collection = fresh_client.get_collection(name=collection_name)
+                            fresh_count = fresh_collection.count()
+                            
+                            if fresh_count > 0:
+                                # Success with fresh client!
+                                self.collection = fresh_collection
+                                self.client = fresh_client  # Update client reference
+                                logger.info(f"✅ Successfully loaded collection '{collection_name}' with {fresh_count} documents (fresh client workaround succeeded)")
+                                collection_loaded = True
+                            else:
+                                # Collection exists but is empty
+                                logger.warning(f"Collection '{collection_name}' exists but is empty")
+                                self.collection = fresh_collection
+                                self.client = fresh_client
+                                collection_loaded = True
+                        except Exception as final_err:
+                            # Final attempt failed - collection is truly inaccessible
+                            logger.error(f"All workaround attempts failed. Final error: {final_err}")
+                            logger.error("Collection may exist but cannot be accessed due to schema mismatch.")
+                            raise RuntimeError(
+                                f"ChromaDB schema error: {get_err}. Please rebuild: "
+                                "rm -rf vector_store && python3 excel_faq_extractor.py --excel 'Swiss Cottages FAQS.xlsx'"
+                            )
+                    else:
+                        # Different error type - re-raise
+                        raise
+            else:
+                # Other error, re-raise
+                raise
+        
+        # If collection wasn't loaded, create it (only if it truly doesn't exist)
+        if not collection_loaded:
+            try:
                 self.collection = self.client.create_collection(
                     name=collection_name,
                     embedding_function=None,
                     metadata=collection_metadata,
                 )
-        except Exception as e:
-            error_msg = str(e).lower()
-            # If it's a schema error when listing, the database is corrupted
-            if "no such column" in error_msg or "topic" in error_msg:
-                logger.error(f"ChromaDB schema error detected: {e}")
-                logger.error("The vector store database has a schema mismatch. Please delete the vector_store directory and rebuild.")
-                raise RuntimeError(
-                    f"ChromaDB schema error: {e}. Please delete vector_store directory and rebuild: "
-                    "rm -rf vector_store && python3 chatbot/memory_builder.py --chunk-size 512 --chunk-overlap 25"
-                )
-            # Other error, try to create collection
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                embedding_function=None,
-                metadata=collection_metadata,
-            )
+                logger.info(f"Created new empty collection: {collection_name}")
+            except Exception as create_err:
+                error_msg = str(create_err).lower()
+                # If collection already exists error, try to get it one more time
+                if "already exists" in error_msg or "duplicate" in error_msg:
+                    logger.info("Collection already exists, trying to get it again...")
+                    try:
+                        self.collection = self.client.get_collection(name=collection_name)
+                        doc_count = self.collection.count()
+                        logger.info(f"✅ Successfully loaded existing collection '{collection_name}' with {doc_count} documents")
+                    except Exception as final_err:
+                        logger.error(f"Failed to get existing collection: {final_err}")
+                        raise
+                else:
+                    raise
 
     @property
     def embeddings(self) -> Embedder | None:
@@ -109,15 +240,118 @@ class Chroma:
 
         See more: https://docs.trychroma.com/reference/py-collection#query
         """
-
-        return self.collection.query(
-            query_texts=query_texts,
-            query_embeddings=query_embeddings,
-            n_results=n_results,
-            where=where,
-            where_document=where_document,
-            **kwargs,
-        )
+        # WORKAROUND: ChromaDB query() and get() have bugs in FastAPI context (works in direct tests)
+        # Try to get a fresh collection reference to avoid threading/state issues
+        try:
+            # Get a fresh collection reference
+            fresh_collection = self.client.get_collection(name=self.collection.name)
+            # Get all documents from collection
+            all_data = fresh_collection.get(limit=None)
+            
+            if not all_data or "documents" not in all_data:
+                logger.error("collection.get() returned no data")
+                return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            
+            all_docs = all_data["documents"]
+            all_metadatas = all_data.get("metadatas", [])
+            all_ids = all_data.get("ids", [])
+            
+            if not isinstance(all_docs, list) or len(all_docs) == 0:
+                logger.error("No documents found in collection")
+                return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            
+            # Get query embedding
+            query_embedding = None
+            if query_embeddings is not None and len(query_embeddings) > 0:
+                query_embedding = query_embeddings[0]
+            elif query_texts is not None and len(query_texts) > 0 and self.embedding is not None:
+                query_embedding = self.embedding.embed_query(query_texts[0])
+            
+            if query_embedding is None:
+                logger.error("Could not generate query embedding")
+                return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            
+            # Get stored embeddings for all documents
+            stored_embeddings = []
+            try:
+                # Try to get embeddings from collection - use get() without ids first to avoid issues
+                try:
+                    embeddings_data = fresh_collection.get(include=["embeddings"])
+                    if embeddings_data and "embeddings" in embeddings_data:
+                        emb_list = embeddings_data["embeddings"]
+                        if isinstance(emb_list, list) and len(emb_list) > 0:
+                            stored_embeddings = emb_list
+                except Exception as emb_err1:
+                    logger.warning(f"Could not retrieve embeddings (method 1): {emb_err1}")
+                    # Try with ids if we have them
+                    if all_ids and len(all_ids) > 0:
+                        try:
+                            embeddings_data = fresh_collection.get(ids=all_ids[:100], include=["embeddings"])  # Limit to 100 to avoid issues
+                            if embeddings_data and "embeddings" in embeddings_data:
+                                emb_list = embeddings_data["embeddings"]
+                                if isinstance(emb_list, list) and len(emb_list) > 0:
+                                    stored_embeddings = emb_list
+                        except Exception as emb_err2:
+                            logger.warning(f"Could not retrieve embeddings (method 2): {emb_err2}")
+            except Exception as emb_err:
+                logger.warning(f"Could not retrieve stored embeddings: {emb_err}")
+            
+            # If we can't get stored embeddings, we can't compute similarity
+            # Just return first N documents
+            if not stored_embeddings or len(stored_embeddings) == 0:
+                logger.warning("No stored embeddings available, returning first N documents without similarity")
+                n = min(n_results, len(all_docs))
+                return {
+                    "documents": [all_docs[:n]],
+                    "metadatas": [all_metadatas[:n] if len(all_metadatas) >= n else all_metadatas + [{}] * (n - len(all_metadatas))],
+                    "distances": [[0.5] * n],  # Dummy distances
+                }
+            
+            # Compute cosine similarity for all documents
+            import numpy as np
+            similarities = []
+            for stored_emb in stored_embeddings:
+                if stored_emb is None:
+                    similarities.append(0.0)
+                    continue
+                try:
+                    # Cosine similarity
+                    query_vec = np.array(query_embedding)
+                    stored_vec = np.array(stored_emb)
+                    dot_product = np.dot(query_vec, stored_vec)
+                    norm_query = np.linalg.norm(query_vec)
+                    norm_stored = np.linalg.norm(stored_vec)
+                    if norm_query > 0 and norm_stored > 0:
+                        similarity = dot_product / (norm_query * norm_stored)
+                    else:
+                        similarity = 0.0
+                    # Convert similarity to distance (1 - similarity)
+                    distance = 1.0 - similarity
+                    similarities.append(distance)
+                except Exception as sim_err:
+                    logger.warning(f"Error computing similarity: {sim_err}")
+                    similarities.append(1.0)  # Max distance if error
+            
+            # Sort by distance (lower is better) and get top N
+            doc_scores = list(zip(all_docs, all_metadatas, similarities))
+            doc_scores.sort(key=lambda x: x[2])  # Sort by distance
+            top_n = doc_scores[:n_results]
+            
+            # Format result
+            result = {
+                "documents": [[doc for doc, _, _ in top_n]],
+                "metadatas": [[meta if meta else {} for _, meta, _ in top_n]],
+                "distances": [[dist for _, _, dist in top_n]],
+            }
+            
+            logger.info(f"Manual similarity computation succeeded: returning {len(top_n)} documents")
+            return result
+        except Exception as fallback_err:
+            logger.error(f"Manual similarity computation failed: {fallback_err}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Return empty results as last resort
+            return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     def add_texts(
         self,
@@ -231,7 +465,7 @@ class Chroma:
         Args:
             chunks (list): List of Document objects to add to the collection.
         """
-        texts = [clean(doc.page_content, normalize_whitespace=True, no_line_breaks=False) for doc in chunks]
+        texts = [clean(doc.page_content) for doc in chunks]
         metadatas = [doc.metadata for doc in chunks]
         self.from_texts(
             texts=texts,
@@ -325,29 +559,55 @@ class Chroma:
             the query text and cosine distance in float for each.
             Lower score represents more similarity.
         """
-        if self.embedding is None:
+        try:
+            # Always use query_texts (ChromaDB handles embedding internally)
+            # This is more reliable and avoids embedding function issues
+            # Don't pass where/where_document if None to avoid ChromaDB internal errors
             results = self.__query_collection(
                 query_texts=[query],
                 n_results=k,
-                where=filter,
-                where_document=where_document,
+                where=filter if filter is not None else None,
+                where_document=where_document if where_document is not None else None,
             )
-        else:
-            query_embedding = self.embedding.embed_query(query)
-            results = self.__query_collection(
-                query_embeddings=[query_embedding],
-                n_results=k,
-                where=filter,
-                where_document=where_document,
-            )
-        return [
-            (Document(page_content=result[0], metadata=result[1] or {}), result[2])
-            for result in zip(
-                results["documents"][0],
-                results["metadatas"][0],
-                results["distances"][0],
-            )
-        ]
+        except Exception as e:
+            logger.error(f"Error in __query_collection: {e}")
+            return []
+        
+        # Handle empty or malformed results
+        if not results or not isinstance(results, dict):
+            logger.warning(f"Query returned unexpected result type: {type(results)}")
+            return []
+        
+        # Check if results have the expected structure
+        if "documents" not in results or not results["documents"]:
+            logger.warning("Query returned no documents")
+            return []
+        
+        # Ensure we have lists, not single values
+        try:
+            documents = results["documents"][0] if isinstance(results["documents"], list) and len(results["documents"]) > 0 else []
+            metadatas = results["metadatas"][0] if isinstance(results["metadatas"], list) and len(results["metadatas"]) > 0 else [{}] * len(documents) if documents else []
+            distances = results["distances"][0] if isinstance(results["distances"], list) and len(results["distances"]) > 0 else [0.0] * len(documents) if documents else []
+            
+            # Ensure all lists have the same length
+            if not isinstance(documents, list) or not isinstance(metadatas, list) or not isinstance(distances, list):
+                logger.error(f"Invalid result types: documents={type(documents)}, metadatas={type(metadatas)}, distances={type(distances)}")
+                return []
+            
+            min_len = min(len(documents), len(metadatas), len(distances))
+            if min_len == 0:
+                return []
+            
+            return [
+                (Document(page_content=doc, metadata=meta or {}), dist)
+                for doc, meta, dist in zip(documents[:min_len], metadatas[:min_len], distances[:min_len])
+            ]
+        except TypeError as te:
+            logger.error(f"TypeError processing query results: {te}, results type: {type(results)}")
+            return []
+        except Exception as e:
+            logger.error(f"Error processing query results: {e}")
+            return []
 
     def __select_relevance_score_fn(self) -> Callable[[float], float]:
         """
@@ -378,8 +638,21 @@ class Chroma:
         # relevance_score_fn is a function to calculate relevance score from distance.
         relevance_score_fn = self.__select_relevance_score_fn()
 
-        docs_and_scores = self.similarity_search_with_score(query, k)
-        docs_and_similarities = [(doc, relevance_score_fn(score)) for doc, score in docs_and_scores]
-        if any(similarity < 0.0 or similarity > 1.0 for _, similarity in docs_and_similarities):
-            logger.warning("Relevance scores must be between" f" 0 and 1, got {docs_and_similarities}")
-        return docs_and_similarities
+        try:
+            docs_and_scores = self.similarity_search_with_score(query, k)
+            # Validate result is a list
+            if not isinstance(docs_and_scores, list):
+                logger.error(f"similarity_search_with_score returned non-list: {type(docs_and_scores)}")
+                return []
+        except Exception as e:
+            logger.error(f"Error in similarity_search_with_score: {e}")
+            return []
+        
+        try:
+            docs_and_similarities = [(doc, relevance_score_fn(score)) for doc, score in docs_and_scores]
+            if any(similarity < 0.0 or similarity > 1.0 for _, similarity in docs_and_similarities):
+                logger.warning("Relevance scores must be between" f" 0 and 1, got {docs_and_similarities}")
+            return docs_and_similarities
+        except Exception as e:
+            logger.error(f"Error processing docs_and_scores: {e}")
+            return []

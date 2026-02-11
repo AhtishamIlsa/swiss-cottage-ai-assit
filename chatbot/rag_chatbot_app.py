@@ -51,11 +51,32 @@ def detect_image_request(query: str) -> tuple[bool, list[str]]:
     image_keywords = [
         "image", "images", "photo", "photos", "picture", "pictures",
         "show me", "see", "view", "gallery", "visual", "look like",
-        "what does", "how does", "appearance", "interior", "exterior"
+        "appearance", "interior", "exterior"
     ]
     
-    # Check if query contains image-related keywords
+    # More specific patterns for image requests (not just "what" or "how")
+    image_patterns = [
+        r"what\s+does\s+(it|the\s+cottage|cottage\s+\d+)\s+look\s+like",
+        r"how\s+does\s+(it|the\s+cottage|cottage\s+\d+)\s+look",
+        r"what\s+(does|is)\s+(it|the\s+cottage|cottage\s+\d+)\s+(look|appear)",
+        r"show\s+(me\s+)?(images|photos|pictures)",
+        r"can\s+(you\s+)?(show|see|view)\s+(images|photos|pictures)",
+    ]
+    
+    # Check for image keywords
     is_image_request = any(keyword in query_lower for keyword in image_keywords)
+    
+    # Check for specific image patterns (but exclude cooking/kitchen queries)
+    if not is_image_request:
+        import re
+        cooking_keywords = ["cook", "cooking", "kitchen", "chef", "food", "meal", "prepare", "make food"]
+        has_cooking_context = any(keyword in query_lower for keyword in cooking_keywords)
+        
+        if not has_cooking_context:
+            for pattern in image_patterns:
+                if re.search(pattern, query_lower):
+                    is_image_request = True
+                    break
     
     # Extract cottage numbers
     cottage_numbers = []
@@ -171,8 +192,10 @@ def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, 
     if use_groq:
         try:
             model_settings = get_model_settings(model_name)
-            llm = GroqClient(api_key=groq_api_key, model_name="llama-3.1-8b-instant", model_settings=model_settings)
-            logger.info("✅ Using Groq API (fast mode)")
+            # Use FAST_MODEL_NAME from env (default: llama-3.1-8b-instant)
+            fast_model_name = os.getenv("FAST_MODEL_NAME", "llama-3.1-8b-instant")
+            llm = GroqClient(api_key=groq_api_key, model_name=fast_model_name, model_settings=model_settings)
+            logger.info(f"✅ Using Groq API (fast mode) with model: {fast_model_name}")
             return llm
         except Exception as e:
             logger.warning(f"Failed to initialize Groq client: {e}. Falling back to local model.")
@@ -186,6 +209,61 @@ def load_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, 
             model_settings = get_model_settings(model_name)
             llm = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
             logger.info("✅ Using local model (llama.cpp)")
+            return llm
+        except ImportError:
+            logger.error("llama_cpp module not installed. Cannot use local model. Please install it or use Groq API.")
+            raise RuntimeError(
+                "❌ Local model requires 'llama_cpp' module.\n\n"
+                "💡 **Solution:** Use Groq API instead (faster and no installation needed):\n"
+                "   Set 'use_groq=True' in the sidebar or ensure GROQ_API_KEY is set in .env"
+            )
+
+
+@st.cache_resource()
+def load_reasoning_llm_client(model_folder: Path, model_name: str, use_groq: bool = True, groq_api_key: str = None, _cache_key: str = "v2") -> Union["LamaCppClient", GroqClient, Any]:
+    """
+    Load reasoning LLM client for complex queries - either Groq API or local model.
+    
+    Args:
+        model_folder: Path to model folder (for local models)
+        model_name: Model name for settings lookup
+        use_groq: If True, use Groq API. If False, use local model.
+        groq_api_key: Groq API key (if None, will try GROQ_API_KEY env var)
+    
+    Returns:
+        LLM client (GroqClient or LamaCppClient) - uses REASONING_MODEL_NAME from env
+    """
+    if use_groq:
+        try:
+            # Use REASONING_MODEL_NAME from env (default: llama-3.1-70b-versatile)
+            reasoning_model_name = os.getenv("REASONING_MODEL_NAME", "llama-3.1-70b-versatile")
+            
+            # Determine model settings based on the actual model name
+            if "gpt-oss" in reasoning_model_name.lower() or "openai/gpt-oss" in reasoning_model_name.lower():
+                settings_model_name = "llama-3.1"
+            elif "llama" in reasoning_model_name.lower():
+                settings_model_name = "llama-3.1"
+            elif "qwen" in reasoning_model_name.lower():
+                settings_model_name = "qwen-2.5:3b"
+            else:
+                settings_model_name = model_name
+            
+            model_settings = get_model_settings(settings_model_name)
+            llm = GroqClient(api_key=groq_api_key, model_name=reasoning_model_name, model_settings=model_settings)
+            logger.info(f"✅ Using Groq API (reasoning mode) with model: {reasoning_model_name}")
+            return llm
+        except Exception as e:
+            logger.warning(f"Failed to initialize reasoning Groq client: {e}. Falling back to local model.")
+            # Fall back to local model
+            use_groq = False
+    
+    if not use_groq:
+        # Lazy import to avoid requiring llama_cpp module
+        try:
+            from bot.client.lama_cpp_client import LamaCppClient
+            model_settings = get_model_settings(model_name)
+            llm = LamaCppClient(model_folder=model_folder, model_settings=model_settings)
+            logger.info("✅ Using local reasoning model (llama.cpp)")
             return llm
         except ImportError:
             logger.error("llama_cpp module not installed. Cannot use local model. Please install it or use Groq API.")
@@ -756,6 +834,47 @@ def main(parameters) -> None:
                                         """Remove LLM reasoning and process text from answer."""
                                         if not answer:
                                             return answer
+                                        
+                                        # Remove structured pricing analysis templates first
+                                        pricing_template_patterns = [
+                                            r"🚨\s*CRITICAL PRICING INFORMATION.*?Your answer MUST include.*?Total cost.*?",
+                                            r"🚨\s*CRITICAL PRICING INFORMATION.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?",
+                                            r"STRUCTURED PRICING ANALYSIS FOR COTTAGE.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?",
+                                            r"ALL PRICES ARE IN PKR.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?",
+                                            r"⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?",
+                                            r"ALL PRICES ARE IN PKR.*?DO NOT USE DOLLAR PRICES.*?",
+                                            r"DO NOT CONVERT TO DOLLARS.*?USE ONLY PKR PRICES BELOW.*?",
+                                            r"🎯\s*TOTAL COST FOR.*?🎯\s*",
+                                        ]
+                                        
+                                        cleaned = answer
+                                        for pattern in pricing_template_patterns:
+                                            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+                                        
+                                        # Remove lines that start with template indicators
+                                        lines = cleaned.split('\n')
+                                        filtered_lines = []
+                                        skip_until_empty = False
+                                        
+                                        for line in lines:
+                                            line_stripped = line.strip()
+                                            if line_stripped.startswith(('🚨', '⚠️', '🎯')) and any(keyword in line_stripped.upper() for keyword in [
+                                                'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'TOTAL COST FOR', 'STRUCTURED PRICING',
+                                                'ALL PRICES ARE IN PKR', 'DO NOT CONVERT', 'YOU MUST USE'
+                                            ]):
+                                                skip_until_empty = True
+                                                continue
+                                            
+                                            if skip_until_empty:
+                                                if not line_stripped or line_stripped == '':
+                                                    skip_until_empty = False
+                                                continue
+                                            
+                                            filtered_lines.append(line)
+                                        
+                                        cleaned = '\n'.join(filtered_lines)
+                                        
+                                        # Remove other reasoning patterns
                                         reasoning_patterns = [
                                             r"However, there seems to be missing context.*?\.\s*",
                                             r"Since the original context is now provided.*?\.\s*",
@@ -772,7 +891,6 @@ def main(parameters) -> None:
                                             r"To refine the existing answer.*?\.\s*",
                                             r"Considering.*?the refined answer.*?\.\s*",
                                         ]
-                                        cleaned = answer
                                         for pattern in reasoning_patterns:
                                             cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.DOTALL)
                                         cleaned = re.sub(r"```.*?```", "", cleaned, flags=re.DOTALL)

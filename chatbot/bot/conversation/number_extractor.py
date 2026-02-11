@@ -36,12 +36,16 @@ class ExtractGroupSize:
         patterns = [
             r"(\d+)\s*(?:members?|people|guests?|persons?|person)",
             r"(?:we\s+are|group\s+of|party\s+of|with)\s+(\d+)",
+            r"group\s+(\d+)",  # "group 7" pattern
+            r"family\s+of\s+(\d+)",  # "family of 7" pattern
             r"(\d+)\s*(?:member|people|guest|person)",
             r"for\s+(\d+)",
             r"(\d+)\s*(?:of\s+us|people|guests)",
             # Pattern for "we are 6 in which 2 are children" - extract the first number (total)
             r"we\s+are\s+(\d+)\s+(?:in\s+which|where|of\s+which)",
             r"(\d+)\s+(?:in\s+which|where|of\s+which)\s+\d+",
+            r"we\s+are\s+a\s+(?:group|family)\s+of\s+(\d+)",  # "we are a group of 7" or "we are a family of 7"
+            r"we\s+are\s+a\s+group\s+(\d+)",  # "we are a group 7"
         ]
         
         for pattern in patterns:
@@ -259,8 +263,8 @@ class ExtractCapacityQuery:
             has_number_with_group = re.search(r"\d+\s+(people|person|guests?|members?|group)", question_lower)
             has_which_cottage = "which cottage" in question_lower or "what cottage" in question_lower
             has_best_for = "best for" in question_lower
-            # Also check for "we are X" or "group of X" patterns
-            has_group_pattern = re.search(r"(we are|group of|party of)\s+\d+", question_lower)
+            # Also check for "we are X", "group of X", "group X", or "family of X" patterns
+            has_group_pattern = re.search(r"(we are|group of|party of|family of|group)\s+(?:a\s+)?\d+", question_lower)
             if has_number_with_group or has_which_cottage or has_best_for or has_group_pattern:
                 logger.debug(f"Detected capacity query in general question: number={has_number_with_group is not None}, which_cottage={has_which_cottage}, best_for={has_best_for}, group_pattern={has_group_pattern is not None}")
                 return True

@@ -88,7 +88,7 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
         super().__init__(llm)
 
     def generate_response(
-        self, retrieved_contents: list[Document], question: str, max_new_tokens: int = 512
+        self, retrieved_contents: list[Document], question: str, max_new_tokens: int = 512, use_simple_prompt: bool = False
     ) -> str | Any:
         """
         Generate a response using create and refine strategy.
@@ -117,15 +117,19 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
         for idx, node in enumerate(retrieved_contents, start=1):
             logger.info(f"--- Generating an answer for the chunk {idx} ... ---")
             context = node.page_content
-            logger.debug(f"--- Context: '{context}' ... ---")
-            if idx == 0:
-                fmt_prompt = self.llm.generate_ctx_prompt(question=question, context=context)
+            
+            # No truncation - use full context
+            
+            logger.debug(f"--- Context: '{context[:200]}...' ... ---")
+            if idx == 1:  # First chunk uses contextual prompt
+                fmt_prompt = self.llm.generate_ctx_prompt(question=question, context=context, use_simple_prompt=use_simple_prompt)
             else:
                 # For refinement, ensure we're adding new information
                 fmt_prompt = self.llm.generate_refined_ctx_prompt(
-                    context=context,
                     question=question,
+                    context=context,
                     existing_answer=str(cur_response) if cur_response else "",
+                    use_simple_prompt=use_simple_prompt,
                 )
 
             if idx == num_of_contents:

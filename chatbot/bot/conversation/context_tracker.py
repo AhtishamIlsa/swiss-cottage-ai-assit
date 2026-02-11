@@ -35,6 +35,7 @@ class ContextTracker:
         self.intent_history: List[IntentType] = []
         self.conversation_summary: List[str] = []
         self.key_points: Dict[str, Any] = {}  # Important facts discussed
+        self.current_cottage: Optional[str] = None  # Track current cottage being discussed
         self.timestamp = datetime.now()
     
     def update_state(self, new_state: ConversationState) -> None:
@@ -202,6 +203,28 @@ class ContextTracker:
         """
         return self.intent_history[-1] if self.intent_history else None
     
+    def set_current_cottage(self, cottage_number: str) -> None:
+        """
+        Set the current cottage being discussed.
+        
+        Args:
+            cottage_number: Cottage number as string (e.g., "7", "9", "11")
+        """
+        if cottage_number != self.current_cottage:
+            logger.info(f"Updated current_cottage: {self.current_cottage} -> {cottage_number}")
+            self.current_cottage = cottage_number
+            # Also store in key_points for easy access
+            self.add_key_point("current_cottage", cottage_number)
+    
+    def get_current_cottage(self) -> Optional[str]:
+        """
+        Get the current cottage being discussed.
+        
+        Returns:
+            Cottage number as string (e.g., "7", "9", "11") or None if not set
+        """
+        return self.current_cottage
+    
     def clear(self) -> None:
         """Clear all context (e.g., after booking completion)."""
         self.state = ConversationState.BROWSING
@@ -209,6 +232,7 @@ class ContextTracker:
         self.intent_history.clear()
         self.conversation_summary.clear()
         self.key_points.clear()
+        self.current_cottage = None
         logger.info(f"Cleared context for session {self.session_id}")
     
     def to_dict(self) -> Dict[str, Any]:
@@ -225,6 +249,7 @@ class ContextTracker:
             "intent_history": [intent.value if hasattr(intent, 'value') else str(intent) for intent in self.intent_history],
             "conversation_summary": self.conversation_summary,
             "key_points": self.key_points,
+            "current_cottage": self.current_cottage,
             "timestamp": self.timestamp.isoformat(),
         }
 
