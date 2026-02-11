@@ -3,7 +3,14 @@ import re
 from asyncio import get_event_loop
 from typing import Any, TYPE_CHECKING, Union
 
-import streamlit as st
+# Optional streamlit import (only needed for Streamlit app)
+try:
+    import streamlit as st
+    STREAMLIT_AVAILABLE = True
+except ImportError:
+    STREAMLIT_AVAILABLE = False
+    st = None
+
 from entities.document import Document
 from helpers.log import get_logger
 
@@ -252,7 +259,7 @@ def stream_response_with_reasoning(
         - The reasoning portion is identified and displayed separately using start and stop tags.
         - The response is updated token by token, with a cursor ("▌") indicating ongoing generation.
     """
-    message_placeholder = st.empty()
+    message_placeholder = st.empty() if STREAMLIT_AVAILABLE else None
     full_response = ""
     reasoning_response = ""
     inside_think = False
@@ -275,8 +282,10 @@ def stream_response_with_reasoning(
         else:
             full_response += llm.parse_token(token)
 
-        message_placeholder.markdown(reasoning_response + full_response + "▌")
+        if message_placeholder:
+            message_placeholder.markdown(reasoning_response + full_response + "▌")
 
-    message_placeholder.markdown(reasoning_response + full_response)
+    if message_placeholder:
+        message_placeholder.markdown(reasoning_response + full_response)
 
     return full_response, reasoning_response

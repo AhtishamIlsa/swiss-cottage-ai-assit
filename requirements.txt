@@ -130,6 +130,7 @@ tokenizers==0.21.2 ; python_version >= "3.10" and python_version < "3.11"
 toml==0.10.2 ; python_version >= "3.10" and python_version < "3.11"
 toolz==0.12.0 ; python_version >= "3.10" and python_version < "3.11"
 torch==2.1.2+cu121 ; python_version >= "3.10" and python_version < "3.11"
+torchaudio==2.1.2+cu121 ; python_version >= "3.10" and python_version < "3.11"
 tornado==6.4 ; python_version >= "3.10" and python_version < "3.11"
 tqdm==4.66.6 ; python_version >= "3.10" and python_version < "3.11"
 transformers==4.50.3 ; python_version >= "3.10" and python_version < "3.11"
@@ -152,3 +153,5 @@ websocket-client==1.7.0 ; python_version >= "3.10" and python_version < "3.11"
 websockets==11.0.3 ; python_version >= "3.10" and python_version < "3.11"
 wrapt==1.16.0 ; python_version >= "3.10" and python_version < "3.11"
 zipp==3.17.0 ; python_version >= "3.10" and python_version < "3.11"
+noisereduce>=3.0.0
+pydub>=0.25.1

@@ -10,6 +10,10 @@ models/*.pth
 vector_store_backup*/
 # *.sqlite3
 # *.db
+# Virtual environment
+venv/
+.venv/
+env/
 
 # Log files
 *.log

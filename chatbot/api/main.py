@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response
@@ -31,6 +31,13 @@ from bot.conversation.fallback_handler import get_fallback_handler
 from bot.client.prompt import generate_slot_question_prompt
 from helpers.log import get_logger
 from helpers.prettier import prettify_source
+
+# Speech modules
+from speech import GroqSTT, GroqTTS, VoiceActivityDetector
+from entities.document import Document
+import tempfile
+import base64
+import asyncio
 
 from .models import (
     ChatRequest,
@@ -199,6 +206,9 @@ cors_origins.extend([
     "http://127.0.0.1:8501",
     "http://localhost",
     "http://127.0.0.1"
+     "http://localhost:8002",  # Add this
+    "http://127.0.0.1:8002",  # Add this
+
 ])
 cors_origins = list(set(cors_origins))  # Remove duplicates
 
@@ -1631,6 +1641,32 @@ async def serve_image(file_path: str):
         raise HTTPException(status_code=500, detail=f"Error serving image: {str(e)}")
 
 
+@app.post("/api/voice")
+async def voice_chat(
+    audio: bytes = None,
+    session_id: str = None,
+):
+    """HTTP fallback endpoint for voice conversation."""
+    from fastapi import UploadFile, File, Form
+    
+    try:
+        # This is a placeholder - actual implementation would use Form data
+        # For now, return error suggesting WebSocket
+        return JSONResponse(
+            status_code=501,
+            content={"error": "HTTP voice endpoint not fully implemented. Please use WebSocket /ws/voice"}
+        )
+    except Exception as e:
+        logger.error(f"Error in voice endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    """Handle favicon requests to prevent 404 errors."""
+    return Response(status_code=204)  # No Content
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
@@ -1640,3 +1676,484 @@ async def root():
         "docs": "/docs",
         "health": "/api/health",
     }
+
+
+@app.websocket("/ws/voice")
+async def websocket_voice_conversation(websocket: WebSocket):
+    """WebSocket endpoint for voice conversation."""
+    await websocket.accept()
+    
+    try:
+        # Send connected message immediately
+        await websocket.send_json({"type": "connected", "message": "WebSocket connected"})
+        
+        # Initialize speech modules and LLM dependencies asynchronously
+        logger.info("Initializing speech modules...")
+        await websocket.send_json({"type": "status", "message": "Initializing speech modules..."})
+        
+        # Initialize STT, TTS, and VAD
+        stt = GroqSTT()
+        tts = GroqTTS()
+        vad = VoiceActivityDetector()
+        
+        await websocket.send_json({"type": "status", "message": "Speech modules initialized"})
+        
+        # Initialize LLM and vector store
+        logger.info("Initializing LLM and vector store...")
+        await websocket.send_json({"type": "status", "message": "Initializing LLM and vector store..."})
+        
+        llm = get_llm_client()
+        vector_store = get_vector_store()
+        intent_router = get_intent_router()
+        ctx_synthesis_strategy = get_ctx_synthesis_strategy("create-and-refine")
+        
+        await websocket.send_json({"type": "ready", "message": "All dependencies initialized"})
+        logger.info("All dependencies initialized, ready for voice conversation")
+        
+        # Wait for init message from client
+        init_data = await websocket.receive_json()
+        if init_data.get("type") != "init":
+            await websocket.send_json({"type": "error", "message": "Expected init message"})
+            return
+        
+        session_id = init_data.get("session_id", "default_session")
+        chat_history = session_manager.get_or_create_session(session_id, total_length=2)
+        # Initialize slot manager for voice endpoint (same as text endpoint)
+        slot_manager = session_manager.get_or_create_slot_manager(session_id, llm)
+        
+        # Main conversation loop
+        while True:
+            try:
+                # Receive audio data
+                data = await websocket.receive()
+                
+                if "bytes" in data:
+                    # Audio data received
+                    audio_bytes = data["bytes"]
+                    
+                    try:
+                        # Save WAV audio to temp file (Web Audio API sends WAV directly)
+                        tmp_audio_path = None
+                        try:
+                            # Validate audio bytes before processing
+                            if not audio_bytes or len(audio_bytes) < 100:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Invalid audio data - please try speaking again"
+                                })
+                                continue
+                            
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+                                tmp_audio.write(audio_bytes)
+                                tmp_audio_path = tmp_audio.name
+                            
+                            # Verify file was written correctly
+                            if not os.path.exists(tmp_audio_path) or os.path.getsize(tmp_audio_path) == 0:
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Failed to process audio - please try speaking again"
+                                })
+                                continue
+                            
+                            logger.info(f"📁 Saved WAV file: {tmp_audio_path}, size: {os.path.getsize(tmp_audio_path)} bytes")
+                            
+                            # Transcribe the WAV file
+                            transcribed_text = stt.transcribe(tmp_audio_path)
+                            print(f"🎤 STT Transcribed text: {transcribed_text}")
+                            
+                        except Exception as file_error:
+                            # Catch any file-related errors
+                            logger.error(f"Error processing audio file: {file_error}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "Error processing audio - please try speaking again"
+                            })
+                            continue
+                        finally:
+                            # Clean up temporary file
+                            if tmp_audio_path and os.path.exists(tmp_audio_path):
+                                try:
+                                    os.unlink(tmp_audio_path)
+                                except Exception:
+                                    pass
+                        
+                        # Validate transcription - reject very short or common false positives
+                        transcribed_text_clean = transcribed_text.strip().lower() if transcribed_text else ""
+                        
+                        # Reject common false positives from silence/noise
+                        false_positives = ["thank you", "thanks", "ok", "okay", "yes", "no", "uh", "um", "ah", "hmm"]
+                        
+                        if not transcribed_text or len(transcribed_text.strip()) < 3:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "No speech detected in audio"
+                            })
+                            continue
+                        
+                        # Reject if transcription is just a false positive (likely noise/silence)
+                        if transcribed_text_clean in false_positives:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "No meaningful speech detected (likely background noise)"
+                            })
+                            continue
+                        
+                        # Refine question (same as text endpoint - with max_new_tokens)
+                        max_new_tokens = 128  # Default for refinement (same as text endpoint)
+                        refined_question = refine_question(
+                            llm, transcribed_text, chat_history=chat_history, max_new_tokens=max_new_tokens
+                        )
+                        print(f"🔍 Refined question: {refined_question}")
+                        logger.info(f"Original query: {transcribed_text}")
+                        logger.info(f"Refined query: {refined_question}")
+                        
+                        # Classify intent
+                        intent = intent_router.classify(refined_question, chat_history)
+                        intent_type = intent.value if hasattr(intent, 'value') else str(intent)
+                        print(f"🎯 Intent: {intent_type}")
+                        
+                        # Extract slots (same as text endpoint)
+                        extracted_slots = slot_manager.extract_slots(transcribed_text, intent)
+                        slot_manager.update_slots(extracted_slots)
+                        
+                        # Handle different intents (same as text endpoint)
+                        if intent == IntentType.GREETING:
+                            answer = (
+                                "Hi! 👋 How may I help you today? I can help you with information about Swiss Cottages Bhurban, including:\n"
+                                "- Pricing and availability\n"
+                                "- Facilities and amenities\n"
+                                "- Location and nearby attractions\n"
+                                "- Booking and payment information\n\n"
+                                "What would you like to know?"
+                            )
+                            await websocket.send_json({
+                                "type": "answer",
+                                "text": answer,
+                                "intent": intent_type
+                            })
+                            chat_history.append(f"question: {refined_question}, answer: {answer}")
+                            continue
+                        
+                        elif intent == IntentType.HELP:
+                            answer = (
+                                "I can help you with information about Swiss Cottages Bhurban! Here's what I can assist with:\n\n"
+                                "🏡 **Property Information:**\n"
+                                "- Cottage details and amenities\n"
+                                "- Pricing and availability\n"
+                                "- Location and nearby attractions\n\n"
+                                "📞 **Contact Information:**\n"
+                                "- Booking inquiries\n"
+                                "- Payment information\n"
+                                "- Special requests\n\n"
+                                "💡 **Tips:**\n"
+                                "- Ask specific questions for better answers\n"
+                                "- I can help with booking information\n"
+                                "- Feel free to ask about facilities, pricing, or location\n\n"
+                                "What would you like to know?"
+                            )
+                            await websocket.send_json({
+                                "type": "answer",
+                                "text": answer,
+                                "intent": intent_type
+                            })
+                            chat_history.append(f"question: {refined_question}, answer: {answer}")
+                            continue
+                        
+                        # Query optimization for better RAG retrieval (same as text endpoint)
+                        if is_query_optimization_enabled():
+                            try:
+                                optimized_query = optimize_query_for_rag(
+                                    llm,
+                                    refined_question,  # Use refined question as input
+                                    max_new_tokens=max_new_tokens
+                                )
+                                logger.info(f"Query optimization: '{refined_question}' → '{optimized_query}'")
+                                search_query = optimized_query
+                            except Exception as e:
+                                logger.warning(f"Query optimization failed: {e}, using refined query")
+                                search_query = refined_question
+                        else:
+                            search_query = refined_question
+                            logger.debug("Query optimization disabled, using refined query")
+                        
+                        print(f"🔎 Vector search query: {search_query}")
+                        
+                        # Determine effective k (same as text endpoint)
+                        effective_k = 3  # Default k value (matches text endpoint)
+                        query_lower = transcribed_text.lower()
+                        
+                        # Increase k for availability queries
+                        if any(word in query_lower for word in ["available", "availability", "which cottages", "which cottage", "vacant", "vacancy"]):
+                            effective_k = max(effective_k, 5)
+                            logger.info(f"Increased k to {effective_k} for availability query")
+                        
+                        # Increase k for payment/pricing/booking queries
+                        if any(word in query_lower for word in ["payment", "price", "pricing", "cost", "rate", "methods", "book", "booking", "reserve"]):
+                            effective_k = max(effective_k, 5)
+                            logger.info(f"Increased k to {effective_k} for payment/pricing/booking query")
+                        
+                        # Increase k for cottage-specific queries
+                        if any(cottage in query_lower for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+                            effective_k = max(effective_k, 5)
+                            logger.info(f"Increased k to {effective_k} for cottage-specific query")
+                        
+                        # Increase k for facility/amenity queries and general "tell me about" queries
+                        if any(word in query_lower for word in ["cook", "kitchen", "facility", "amenity", "amenities", "facilities", "what", "tell me about", "information about", "about cottages", "about the cottages"]):
+                            effective_k = max(effective_k, 5)
+                            logger.info(f"Increased k to {effective_k} for facility/amenity/general query")
+                        
+                        # Increase k for group size/capacity queries
+                        if any(word in query_lower for word in ["member", "members", "people", "person", "persons", "guest", "guests", "group", "suitable", "best for", "accommodate", "capacity"]):
+                            effective_k = max(effective_k, 5)
+                            logger.info(f"Increased k to {effective_k} for group size/capacity query")
+                        
+                        # Retrieve documents (same logic as text endpoint with deduplication)
+                        retrieved_contents = []
+                        sources = []
+                        
+                        try:
+                            # Retrieve more documents than needed to ensure diversity (same as text endpoint)
+                            retrieved_contents, sources = vector_store.similarity_search_with_threshold(
+                                query=search_query, k=min(effective_k * 3, 15), threshold=0.0  # Get 3x more for deduplication
+                            )
+                            logger.info(f"Retrieved {len(retrieved_contents)} documents with search query")
+                            
+                            # Deduplicate by source to ensure diversity (same as text endpoint)
+                            seen_sources = set()
+                            unique_contents = []
+                            unique_sources = []
+                            
+                            for doc, source_info in zip(retrieved_contents, sources):
+                                source = source_info.get("document", "unknown")
+                                # Use source as key for deduplication
+                                if source not in seen_sources:
+                                    seen_sources.add(source)
+                                    unique_contents.append(doc)
+                                    unique_sources.append(source_info)
+                                    if len(unique_contents) >= effective_k:
+                                        break
+                            
+                            retrieved_contents = unique_contents
+                            sources = unique_sources
+                            logger.info(f"After deduplication: {len(retrieved_contents)} unique documents")
+                        except Exception as e:
+                            logger.warning(f"Error with threshold search (refined): {e}, trying without threshold")
+                            try:
+                                # Retrieve more for deduplication
+                                retrieved_docs = vector_store.similarity_search(query=search_query, k=min(effective_k * 3, 15))
+                                # Deduplicate
+                                seen_sources = set()
+                                unique_contents = []
+                                unique_sources = []
+                                for doc in retrieved_docs:
+                                    source = doc.metadata.get("source", "unknown")
+                                    if source not in seen_sources:
+                                        seen_sources.add(source)
+                                        unique_contents.append(doc)
+                                        unique_sources.append({
+                                            "score": "N/A",
+                                            "document": source,
+                                            "content_preview": f"{doc.page_content[0:256]}..."
+                                        })
+                                        if len(unique_contents) >= effective_k:
+                                            break
+                                retrieved_contents = unique_contents
+                                sources = unique_sources
+                            except Exception as e2:
+                                logger.error(f"Error with similarity search (refined): {e2}")
+                        
+                        # If no results, try original query (same as text endpoint)
+                        if not retrieved_contents:
+                            logger.info("No results with optimized query, trying original query")
+                            try:
+                                retrieved_contents, sources = vector_store.similarity_search_with_threshold(
+                                    query=transcribed_text, k=effective_k, threshold=0.0
+                                )
+                            except Exception as e:
+                                try:
+                                    retrieved_contents = vector_store.similarity_search(query=transcribed_text, k=effective_k)
+                                    sources = [
+                                        {
+                                            "score": "N/A",
+                                            "document": doc.metadata.get("source", "unknown"),
+                                            "content_preview": f"{doc.page_content[0:256]}..."
+                                        }
+                                        for doc in retrieved_contents
+                                    ]
+                                except Exception as e2:
+                                    logger.error(f"Error with fallback search: {e2}")
+                                    retrieved_contents = []
+                                    sources = []
+                        
+                        print(f"📚 Retrieved {len(retrieved_contents)} documents")
+                        
+                        if not retrieved_contents:
+                            answer = (
+                                "I couldn't find specific information about that in our knowledge base.\n\n"
+                                "💡 **Please try:**\n"
+                                "- Rephrasing your question\n"
+                                "- Using different keywords\n"
+                                "- Being more specific about Swiss Cottages Bhurban\n"
+                            )
+                            await websocket.send_json({
+                                "type": "answer",
+                                "text": answer,
+                                "intent": intent_type
+                            })
+                            chat_history.append(f"question: {refined_question}, answer: {answer}")
+                            continue
+                        
+                        # Convert documents to Document objects if needed (already done above)
+                        # Ensure all are Document objects
+                        final_contents = []
+                        for doc in retrieved_contents:
+                            if hasattr(doc, 'page_content'):
+                                # Already a Document object
+                                final_contents.append(doc)
+                            else:
+                                # Convert from dict
+                                final_contents.append(Document(
+                                    page_content=doc.get('page_content', '') if isinstance(doc, dict) else str(doc),
+                                    metadata=doc.get('metadata', {}) if isinstance(doc, dict) else {}
+                                ))
+                        
+                        # Generate answer with context (same as text endpoint)
+                        max_new_tokens = 512  # Same as text endpoint default
+                        
+                        # Enhance question with slot information for pricing/booking queries (same as text endpoint)
+                        enhanced_question = refined_question
+                        if intent in [IntentType.PRICING, IntentType.BOOKING] and slot_manager.get_slots():
+                            slots = slot_manager.get_slots()
+                            slot_info_parts = []
+                            if slots.get("nights"):
+                                slot_info_parts.append(f"for {slots['nights']} nights")
+                            if slots.get("guests"):
+                                slot_info_parts.append(f"for {slots['guests']} guests")
+                            if slots.get("room_type"):
+                                slot_info_parts.append(f"in {slots['room_type']}")
+                            if slot_info_parts:
+                                # Append slot info to question to make it explicit for LLM
+                                enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
+                        
+                        streamer, _ = answer_with_context(
+                            llm,
+                            ctx_synthesis_strategy,
+                            enhanced_question,  # Use enhanced question with slot info
+                            chat_history,
+                            final_contents,
+                            max_new_tokens,
+                        )
+                        
+                        # Collect answer from streamer
+                        answer = ""
+                        print(f"🤖 LLM generating response...")
+                        for token in streamer:
+                            parsed_token = llm.parse_token(token)
+                            answer += parsed_token
+                        
+                        # Handle reasoning models
+                        if llm.model_settings.reasoning:
+                            answer = extract_content_after_reasoning(
+                                answer, llm.model_settings.reasoning_stop_tag
+                            )
+                        
+                        # Clean answer text
+                        answer = clean_answer_text(answer)
+                        
+                        # Validate currency
+                        context_text = "\n".join([doc.page_content for doc in retrieved_contents[:3]])
+                        answer = validate_and_fix_currency(answer, context_text)
+                        
+                        print(f"✅ LLM Response: {answer[:200]}...")
+                        
+                        # Update chat history
+                        chat_history.append(f"question: {refined_question}, answer: {answer}")
+                        
+                        # Validate answer before TTS
+                        answer_lower = answer.lower().strip()
+                        if not answer or len(answer) < 10:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": "Answer too short, skipping TTS"
+                            })
+                            continue
+                        
+                        # Check for "no information" indicators
+                        no_info_phrases = [
+                            "i don't know",
+                            "i cannot",
+                            "i'm not able",
+                            "i don't have",
+                            "no information",
+                            "couldn't find"
+                        ]
+                        if any(phrase in answer_lower for phrase in no_info_phrases) and len(answer) < 50:
+                            await websocket.send_json({
+                                "type": "answer",
+                                "text": answer,
+                                "question": transcribed_text,  # Include the user's question
+                                "intent": intent_type
+                            })
+                            continue
+                        
+                        # Generate TTS audio
+                        print(f"🔊 Generating TTS audio for answer...")
+                        tts_audio_bytes = tts.synthesize(answer)
+                        
+                        # Send answer text and audio, including the user's question
+                        audio_base64 = base64.b64encode(tts_audio_bytes).decode('utf-8')
+                        await websocket.send_json({
+                            "type": "answer",
+                            "text": answer,
+                            "audio": audio_base64,
+                            "question": transcribed_text,  # Include the user's question
+                            "intent": intent_type
+                        })
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing voice input: {e}", exc_info=True)
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Error processing audio: {str(e)}"
+                        })
+                    finally:
+                        # Clean up temporary files if they were created
+                        cleanup_paths = []
+                        if 'tmp_audio_path' in locals() and tmp_audio_path:
+                            cleanup_paths.append(tmp_audio_path)
+                        
+                        for path in cleanup_paths:
+                            try:
+                                if path and os.path.exists(path):
+                                    os.unlink(path)
+                            except Exception:
+                                pass
+                
+                elif "text" in data:
+                    # Text message (for control messages)
+                    message = json.loads(data["text"])
+                    if message.get("type") == "cancel":
+                        # Client requested cancellation
+                        await websocket.send_json({"type": "cancelled"})
+                
+            except WebSocketDisconnect:
+                logger.info("WebSocket disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error in WebSocket loop: {e}", exc_info=True)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Internal error: {str(e)}"
+                })
+    
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected during initialization")
+    except Exception as e:
+        logger.error(f"Error in WebSocket endpoint: {e}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Initialization error: {str(e)}"
+            })
+        except:
+            pass
