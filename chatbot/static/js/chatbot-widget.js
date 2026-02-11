@@ -782,28 +782,15 @@
                 return; // Don't add duplicate
             }
 
-            // SECOND: Check messages array - check last 10 messages to catch recent duplicates
+            // SECOND: Check messages array - check ALL messages for exact duplicates
             if (this.messages.length > 0) {
-                const recentMessages = this.messages.slice(-10); // Check last 10 messages
-                for (const msg of recentMessages) {
+                for (const msg of this.messages) {
                     if (msg.role === role) {
                         const msgContent = normalizeContent(msg.content).trim().toLowerCase();
-                        // Use exact matching for user messages, fuzzy for assistant
-                        if (role === 'user') {
-                            if (msgContent === normalizedContent) {
-                                console.log('⚠️ Duplicate user message detected in array, skipping:', normalizedContent.substring(0, 50));
-                                return; // Don't add duplicate
-                            }
-                        } else {
-                            // For assistant, allow small differences
-                            if (msgContent === normalizedContent ||
-                                (msgContent.length > 10 && normalizedContent.length > 10 &&
-                                    Math.abs(msgContent.length - normalizedContent.length) < 5 &&
-                                    msgContent.substring(0, Math.min(50, msgContent.length)) ===
-                                    normalizedContent.substring(0, Math.min(50, normalizedContent.length)))) {
-                                console.log('⚠️ Duplicate assistant message detected in array, skipping:', normalizedContent.substring(0, 50));
-                                return; // Don't add duplicate
-                            }
+                        // Use exact matching for both user and assistant messages
+                        if (msgContent === normalizedContent) {
+                            console.log('⚠️ Duplicate message detected in array, skipping:', normalizedContent.substring(0, 50));
+                            return; // Don't add duplicate
                         }
                     }
                 }
@@ -813,11 +800,13 @@
             const messagesContainer = document.getElementById('chatbot-messages');
             if (messagesContainer) {
                 // Check if a message with the same content already exists in DOM
-                const existingMessages = messagesContainer.querySelectorAll(`.chatbot-message-${role}`);
+                // Exclude streaming messages from check (they're being built)
+                const existingMessages = messagesContainer.querySelectorAll(`.chatbot-message-${role}:not(.chatbot-streaming)`);
                 for (const msg of existingMessages) {
                     const msgContent = msg.querySelector('.chatbot-message-content');
                     if (msgContent) {
-                        const existingText = normalizeContent(msgContent.innerHTML).trim().toLowerCase();
+                        // Use textContent instead of innerHTML for more reliable comparison
+                        const existingText = normalizeContent(msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
                         if (existingText === normalizedContent) {
                             console.log('⚠️ Duplicate message detected in DOM, skipping:', normalizedContent.substring(0, 50));
                             return; // Don't add duplicate
@@ -839,6 +828,10 @@
                 console.error('Messages container not found');
                 return;
             }
+
+            // Add to messages array IMMEDIATELY before creating DOM element to prevent duplicates
+            this.messages.push({ role, content });
+
             const messageDiv = document.createElement('div');
             messageDiv.className = `chatbot-message chatbot-message-${role}`;
 
@@ -1044,8 +1037,7 @@
                 }
             }
 
-            // Add to messages array
-            this.messages.push({ role, content });
+            // Message already added to array above to prevent duplicates
 
             // Remove from pending after successfully adding (with delay to catch rapid duplicates)
             // Keep it in pending for 2 seconds to prevent rapid duplicates
@@ -1454,16 +1446,34 @@
             this.updateSendButton();
 
             // Add user message (duplicate check is inside addMessage)
-            // Check if message already exists before adding
+            // Double-check before adding to prevent duplicates
             const normalizedQuestion = question.trim().toLowerCase();
             const alreadyExists = this.messages.some(msg =>
                 msg.role === 'user' && msg.content.trim().toLowerCase() === normalizedQuestion
             );
 
-            if (!alreadyExists) {
+            // Also check DOM for immediate duplicates (exclude any streaming messages)
+            const messagesContainer = document.getElementById('chatbot-messages');
+            let existsInDOM = false;
+            if (messagesContainer) {
+                const existingUserMessages = messagesContainer.querySelectorAll('.chatbot-message-user:not(.chatbot-streaming)');
+                for (const msg of existingUserMessages) {
+                    const msgContent = msg.querySelector('.chatbot-message-content');
+                    if (msgContent) {
+                        // Use textContent for reliable comparison
+                        const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
+                        if (existingText === normalizedQuestion) {
+                            existsInDOM = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!alreadyExists && !existsInDOM) {
                 this.addMessage('user', question);
             } else {
-                console.log('⚠️ Question already in messages, skipping duplicate');
+                console.log('⚠️ Question already exists (in messages or DOM), skipping duplicate');
             }
 
             // Show loading
@@ -1471,7 +1481,7 @@
 
 
             // Create assistant message container for streaming
-            const messagesContainer = document.getElementById('chatbot-messages');
+            // Reuse messagesContainer from above
             const messageDiv = document.createElement('div');
             messageDiv.className = 'chatbot-message chatbot-message-assistant chatbot-streaming';
 
@@ -1628,6 +1638,33 @@
                                     }
                                 }
                                 else if (data.type === 'done') {
+                                    // Check if this assistant message already exists in DOM or array before processing
+                                    const normalizedAnswer = fullAnswer.trim().toLowerCase();
+                                    const alreadyInArray = this.messages.some(msg =>
+                                        msg.role === 'assistant' && msg.content.trim().toLowerCase() === normalizedAnswer
+                                    );
+
+                                    // Check if message already exists in DOM (shouldn't happen, but check anyway)
+                                    const existingAssistantMessages = messagesContainer.querySelectorAll('.chatbot-message-assistant:not(.chatbot-streaming)');
+                                    let alreadyInDOM = false;
+                                    for (const msg of existingAssistantMessages) {
+                                        const msgContent = msg.querySelector('.chatbot-message-content');
+                                        if (msgContent) {
+                                            const existingText = msgContent.textContent.trim().toLowerCase();
+                                            if (existingText === normalizedAnswer) {
+                                                alreadyInDOM = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // If duplicate found, remove the streaming messageDiv and return
+                                    if (alreadyInArray || alreadyInDOM) {
+                                        console.log('⚠️ Duplicate assistant message detected in done event, removing streaming div');
+                                        messageDiv.remove();
+                                        return;
+                                    }
+
                                     // Remove thinking indicator if still showing
                                     const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
                                     if (thinkingIndicator) {
@@ -1667,6 +1704,8 @@
                                     }
 
                                     messageDiv.classList.remove('chatbot-streaming');
+
+                                    // Add to messages array - duplicate check already done above
                                     this.messages.push({ role: 'assistant', content: fullAnswer });
 
                                     // Final scroll
@@ -2841,23 +2880,71 @@
 
             // Display user's question if provided
             // NOTE: For voice, the question should already be added when recording stops
-            // Only add if it's not already in the messages array to prevent duplicates
+            // Only add if it's not already in the messages array or DOM to prevent duplicates
             if (data.question) {
                 const questionText = data.question.trim();
-                // Check if this question was already added
-                const alreadyAdded = this.messages.some(msg =>
-                    msg.role === 'user' && msg.content.trim() === questionText
+                const normalizedQuestion = questionText.trim().toLowerCase();
+
+                // Check messages array
+                const alreadyInArray = this.messages.some(msg =>
+                    msg.role === 'user' && msg.content.trim().toLowerCase() === normalizedQuestion
                 );
-                if (!alreadyAdded) {
+
+                // Check DOM
+                const messagesContainer = document.getElementById('chatbot-messages');
+                let alreadyInDOM = false;
+                if (messagesContainer) {
+                    const existingUserMessages = messagesContainer.querySelectorAll('.chatbot-message-user:not(.chatbot-streaming)');
+                    for (const msg of existingUserMessages) {
+                        const msgContent = msg.querySelector('.chatbot-message-content');
+                        if (msgContent) {
+                            const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
+                            if (existingText === normalizedQuestion) {
+                                alreadyInDOM = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!alreadyInArray && !alreadyInDOM) {
                     this.addMessage('user', questionText);
                 } else {
-                    console.log('⚠️ User question already added, skipping duplicate:', questionText.substring(0, 50));
+                    console.log('⚠️ User question already exists (in array or DOM), skipping duplicate:', questionText.substring(0, 50));
                 }
             }
 
             // Display assistant's response
             if (data.text) {
-                this.addMessage('assistant', data.text);
+                const normalizedText = data.text.trim().toLowerCase();
+
+                // Check messages array
+                const alreadyInArray = this.messages.some(msg =>
+                    msg.role === 'assistant' && msg.content.trim().toLowerCase() === normalizedText
+                );
+
+                // Check DOM
+                const messagesContainer = document.getElementById('chatbot-messages');
+                let alreadyInDOM = false;
+                if (messagesContainer) {
+                    const existingAssistantMessages = messagesContainer.querySelectorAll('.chatbot-message-assistant:not(.chatbot-streaming)');
+                    for (const msg of existingAssistantMessages) {
+                        const msgContent = msg.querySelector('.chatbot-message-content');
+                        if (msgContent) {
+                            const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
+                            if (existingText === normalizedText) {
+                                alreadyInDOM = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!alreadyInArray && !alreadyInDOM) {
+                    this.addMessage('assistant', data.text);
+                } else {
+                    console.log('⚠️ Assistant response already exists (in array or DOM), skipping duplicate:', data.text.substring(0, 50));
+                }
             }
 
             if (data.audio) {
