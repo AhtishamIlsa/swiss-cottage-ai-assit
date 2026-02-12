@@ -325,8 +325,13 @@ class IntentRouter:
                 if any(keyword in query_lower for keyword in facilities_keywords):
                     return IntentType.FACILITIES
                 
-                # Location intent
-                location_keywords = ["location", "address", "where", "nearby", "surrounding", "area", "place"]
+                # Location intent - expanded keywords to catch more location queries
+                location_keywords = [
+                    "location", "address", "where", "nearby", "surrounding", "area", "place",
+                    "attractions", "attraction", "nearby attractions", "nearby places", "places to visit",
+                    "where is it", "where is it located", "where are they", "where are they located",
+                    "surroundings", "around", "near", "close to", "vicinity"
+                ]
                 if any(keyword in query_lower for keyword in location_keywords):
                     return IntentType.LOCATION
                 

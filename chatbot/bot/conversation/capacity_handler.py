@@ -158,7 +158,7 @@ CRITICAL INSTRUCTIONS:
                     answer_template = f"""
 STRUCTURED CAPACITY INFORMATION:
 
-🚨🚨🚨 CRITICAL: NO GROUP SIZE PROVIDED - DO NOT MAKE SUITABILITY JUDGMENTS 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] CRITICAL: NO GROUP SIZE PROVIDED - DO NOT MAKE SUITABILITY JUDGMENTS [CRITICAL][CRITICAL][CRITICAL]
 
 DIRECT ANSWER (USE THIS EXACTLY):
 Cottage capacity information:
@@ -180,7 +180,7 @@ Cottage capacity information:
                         answer_template = f"""
 STRUCTURED CAPACITY INFORMATION:
 
-🚨🚨🚨 CRITICAL: NO GROUP SIZE PROVIDED - DO NOT MAKE SUITABILITY JUDGMENTS 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] CRITICAL: NO GROUP SIZE PROVIDED - DO NOT MAKE SUITABILITY JUDGMENTS [CRITICAL][CRITICAL][CRITICAL]
 
 DIRECT ANSWER (USE THIS EXACTLY):
 Cottage {cottage_number} ({capacity_info['bedrooms']}-bedroom) can accommodate:
@@ -223,19 +223,19 @@ Cottage {cottage_number} ({capacity_info['bedrooms']}-bedroom) can accommodate:
                 if group_size <= 6:
                     if is_family:
                         # For families, prioritize Cottage 9 and 11 (3-bedroom, ideal for families)
-                        recommendation = f"✅ RECOMMENDATION: For your family of {group_size}, I recommend Cottage 9 or Cottage 11 (3-bedroom cottages with more space, ideal for families). Both can accommodate your family comfortably at standard capacity."
-                        answer_text = f"✅ YES, for your family of {group_size}, I recommend Cottage 9 or Cottage 11. These are 3-bedroom cottages with more space, ideal for families. Both can accommodate up to 6 guests comfortably at standard capacity."
+                        recommendation = f"[YES] RECOMMENDATION: For your family of {group_size}, I recommend Cottage 9 or Cottage 11 (3-bedroom cottages with more space, ideal for families). Both can accommodate your family comfortably at standard capacity."
+                        answer_text = f"[YES] YES, for your family of {group_size}, I recommend Cottage 9 or Cottage 11. These are 3-bedroom cottages with more space, ideal for families. Both can accommodate up to 6 guests comfortably at standard capacity."
                     else:
-                        recommendation = f"✅ RECOMMENDATION: Any cottage (Cottage 7, 9, or 11) is suitable for your group of {group_size} guests at standard capacity. Cottage 9 and Cottage 11 are 3-bedroom cottages with more space, ideal for families."
-                        answer_text = f"✅ YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) at standard capacity. All cottages can accommodate up to 6 guests comfortably."
+                        recommendation = f"[YES] RECOMMENDATION: Any cottage (Cottage 7, 9, or 11) is suitable for your group of {group_size} guests at standard capacity. Cottage 9 and Cottage 11 are 3-bedroom cottages with more space, ideal for families."
+                        answer_text = f"[YES] YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) at standard capacity. All cottages can accommodate up to 6 guests comfortably."
                     direct_answer = answer_text
                 elif group_size <= 9:
-                    recommendation = f"✅ RECOMMENDATION: Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for your group of {group_size} guests. They can accommodate your group with prior confirmation. Cottage 7 (2-bedroom) can also accommodate {group_size} guests, but Cottages 9 and 11 offer more space for larger groups."
-                    answer_text = f"✅ YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) with prior confirmation. Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for larger groups. All cottages have a maximum capacity of 9 guests per cottage."
+                    recommendation = f"[YES] RECOMMENDATION: Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for your group of {group_size} guests. They can accommodate your group with prior confirmation. Cottage 7 (2-bedroom) can also accommodate {group_size} guests, but Cottages 9 and 11 offer more space for larger groups."
+                    answer_text = f"[YES] YES, your group of {group_size} guests can stay in any cottage (Cottage 7, 9, or 11) with prior confirmation. Cottages 9 and 11 are 3-bedroom cottages with more space, ideal for larger groups. All cottages have a maximum capacity of 9 guests per cottage."
                     direct_answer = answer_text
                 else:
-                    recommendation = "❌ RECOMMENDATION: Your group exceeds the maximum capacity of 9 guests per cottage. You will need to book multiple cottages. Contact the manager to arrange multiple cottage bookings."
-                    answer_text = f"❌ NO, your group of {group_size} guests exceeds the maximum capacity of 9 guests per cottage. You must book multiple cottages."
+                    recommendation = "[NO] RECOMMENDATION: Your group exceeds the maximum capacity of 9 guests per cottage. You will need to book multiple cottages. Contact the manager to arrange multiple cottage bookings."
+                    answer_text = f"[NO] NO, your group of {group_size} guests exceeds the maximum capacity of 9 guests per cottage. You must book multiple cottages."
                     direct_answer = answer_text
                 
                 # Check if dates are already provided in the query
@@ -265,16 +265,16 @@ Cottage {cottage_number} ({capacity_info['bedrooms']}-bedroom) can accommodate:
                     next_steps = "Contact the manager to arrange multiple cottage bookings."
                 
                 answer_template = f"""
-🚨🚨🚨 CRITICAL: USE ONLY THE ANSWER TEXT BELOW - DO NOT INCLUDE THESE MARKERS IN YOUR RESPONSE 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] CRITICAL: USE ONLY THE ANSWER TEXT BELOW - DO NOT INCLUDE THESE MARKERS IN YOUR RESPONSE [CRITICAL][CRITICAL][CRITICAL]
 
 ANSWER TEXT (COPY THIS EXACTLY - DO NOT INCLUDE THE MARKERS ABOVE OR BELOW):
 {answer_text}
 
-🚨🚨🚨 END OF ANSWER TEXT - DO NOT INCLUDE THIS MARKER IN YOUR RESPONSE 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] END OF ANSWER TEXT - DO NOT INCLUDE THIS MARKER IN YOUR RESPONSE [CRITICAL][CRITICAL][CRITICAL]
 
-⚠️⚠️⚠️ CRITICAL INSTRUCTIONS - READ CAREFULLY ⚠️⚠️⚠️:
+[WARNING][WARNING][WARNING] CRITICAL INSTRUCTIONS - READ CAREFULLY [WARNING][WARNING][WARNING]:
 1. YOUR RESPONSE MUST START WITH THE ANSWER TEXT ABOVE (the text between the markers)
-2. DO NOT include the 🚨 markers or "MANDATORY RESPONSE" text in your response - these are for internal use only
+2. DO NOT include the [CRITICAL] markers or "MANDATORY RESPONSE" text in your response - these are for internal use only
 3. DO NOT include "END OF MANDATORY RESPONSE" or "END OF ANSWER TEXT" in your response
 4. DO NOT add "Swiss Cottages Bhurban offers the following cottages:" or similar generic introductions
 5. DO NOT list all cottages with their capacities - the ANSWER TEXT above is your complete answer
@@ -338,27 +338,27 @@ RECOMMENDATION (ALREADY INCLUDED IN ANSWER TEXT ABOVE):
         # Create detailed comparison
         if group_size <= base_capacity:
             comparison = f"{group_size} ≤ {base_capacity} base capacity = SUITABLE (comfortable at standard capacity)"
-            direct_answer = f"✅ YES, your group of {group_size} guests can stay in Cottage {cottage_number} comfortably at standard capacity. Cottage {cottage_number} can accommodate up to {base_capacity} guests at standard capacity."
+            direct_answer = f"[YES] YES, your group of {group_size} guests can stay in Cottage {cottage_number} comfortably at standard capacity. Cottage {cottage_number} can accommodate up to {base_capacity} guests at standard capacity."
         elif group_size <= max_capacity:
             comparison = f"{group_size} ≤ {max_capacity} max capacity = SUITABLE (requires prior confirmation)"
-            direct_answer = f"✅ YES, your group of {group_size} guests can stay in Cottage {cottage_number} with prior confirmation. Cottage {cottage_number} can accommodate up to {max_capacity} guests maximum."
+            direct_answer = f"[YES] YES, your group of {group_size} guests can stay in Cottage {cottage_number} with prior confirmation. Cottage {cottage_number} can accommodate up to {max_capacity} guests maximum."
         else:
             comparison = f"{group_size} > {max_capacity} max capacity = NOT SUITABLE (must book multiple cottages)"
-            direct_answer = f"❌ NO, your group of {group_size} guests exceeds the maximum capacity of {max_capacity} guests for Cottage {cottage_number}. For comfort, safety, and community guidelines, groups exceeding {max_capacity} guests must book multiple cottages."
+            direct_answer = f"[NO] NO, your group of {group_size} guests exceeds the maximum capacity of {max_capacity} guests for Cottage {cottage_number}. For comfort, safety, and community guidelines, groups exceeding {max_capacity} guests must book multiple cottages."
         
         answer_template = f"""
 STRUCTURED CAPACITY ANALYSIS:
 
-🚨🚨🚨 CRITICAL: USE ONLY THE DIRECT ANSWER BELOW - DO NOT INCLUDE THESE MARKERS IN YOUR RESPONSE 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] CRITICAL: USE ONLY THE DIRECT ANSWER BELOW - DO NOT INCLUDE THESE MARKERS IN YOUR RESPONSE [CRITICAL][CRITICAL][CRITICAL]
 
 DIRECT ANSWER (COPY THIS EXACTLY - DO NOT INCLUDE THE MARKERS ABOVE OR BELOW):
 {direct_answer}
 
-🚨🚨🚨 END OF ANSWER TEXT - DO NOT INCLUDE THIS MARKER IN YOUR RESPONSE 🚨🚨🚨
+[CRITICAL][CRITICAL][CRITICAL] END OF ANSWER TEXT - DO NOT INCLUDE THIS MARKER IN YOUR RESPONSE [CRITICAL][CRITICAL][CRITICAL]
 
-⚠️⚠️⚠️ IMPORTANT INSTRUCTIONS FOR LLM ⚠️⚠️⚠️:
+[WARNING][WARNING][WARNING] IMPORTANT INSTRUCTIONS FOR LLM [WARNING][WARNING][WARNING]:
 1. YOUR RESPONSE MUST START WITH THE DIRECT ANSWER ABOVE (the text between the markers)
-2. DO NOT include the 🚨 markers or "CRITICAL" text in your response - these are for internal use only
+2. DO NOT include the [CRITICAL] markers or "CRITICAL" text in your response - these are for internal use only
 3. DO NOT include "END OF ANSWER TEXT" or "END OF MANDATORY RESPONSE" in your response
 4. DO NOT say "Unfortunately" or "it seems" - use the exact DIRECT ANSWER provided
 5. DO NOT contradict the DIRECT ANSWER - it is based on verified capacity data

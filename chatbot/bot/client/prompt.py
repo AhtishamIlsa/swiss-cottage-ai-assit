@@ -19,8 +19,23 @@ QA_PROMPT_TEMPLATE = """Answer the question below:
 # Common system facts shared across all prompts
 COMMON_SYSTEM_FACTS = """- Only cottages: 7, 9, 11
 - No other cottages exist
-- Location: Swiss Cottages Bhurban, Bhurban, Murree, Pakistan (in Murree Hills, NOT Azad Kashmir, NOT Patriata, NOT PC Bhurban)
-- Do not invent entities"""
+- CORRECT LOCATION: Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan
+- Location formats: "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan" or "Swiss Cottages Bhurban, Bhurban, Murree, Pakistan"
+- [CRITICAL] NEVER say "Azad Kashmir" or "Patriata" for cottage location - these are WRONG
+- [CRITICAL] NEVER say "Bhubaneswar" (India) for cottage location - this is COMPLETELY WRONG
+- [CRITICAL] NEVER say "Lahore", "Karachi", "Islamabad" for cottage location - these are WRONG
+- PC Bhurban (Pearl Continental Bhurban) is a nearby hotel/viewpoint, NOT where cottages are - cottages are adjacent to it
+- Google Maps link: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
+- Do not invent entities
+- CRITICAL NAMING RULE: ALWAYS use "Swiss Cottages Bhurban" or "Swiss Cottages" - NEVER use "mountain cottage", "pearl cottage", "Pearl Cottage", "Swiss Chalet", "Swiss Chalet cottages", or any variation
+- If you see "mountain cottage", "pearl cottage", "Swiss Chalet", "Swiss Chalet cottages", or any incorrect name in context, REPLACE it with "Swiss Cottages Bhurban" in your answer
+- The property is called "Swiss Cottages Bhurban" - this is the ONLY correct name
+- CRITICAL LOCATION RULE: Swiss Cottages is in "Murree Hills, Bhurban, Pakistan" - NEVER say "Azad Kashmir", "Patriata", "Bhubaneswar", "Lahore", "Karachi", or "Islamabad" for location
+- If context says "Azad Kashmir", "Patriata", "Bhubaneswar", "Lahore", "Karachi", or "Islamabad" for location, IGNORE IT - it is WRONG
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER generate example URLs like "example.com", "placeholder.com", "test.com" - these are from training data, NOT from context
+- [CRITICAL] ONLY use URLs that appear in the context provided - if context doesn't have a URL, DO NOT invent one
+- [CRITICAL] If context mentions photo gallery or images, use ONLY the URLs from context (e.g., swisscottagesbhurban.com, Airbnb links, Instagram links)
+- [CRITICAL] DO NOT generate placeholder text like "Take a look at our photo gallery" with example.com URLs - this is from training data"""
 
 # Short prompt template for simple queries (reduces context size to prevent 413 errors)
 # NOTE: This is a fallback template used only when USE_INTENT_FILTERING=false or intent is not detected
@@ -80,7 +95,7 @@ CRITICAL INSTRUCTIONS:
 - DO NOT mention pricing unless question explicitly asks about it
 - IMPORTANT: The new context may contain ADDITIONAL information that should be ADDED to the existing answer.
 - If the new context contains relevant information NOT already in the existing answer, you MUST include it in the refined answer.
-- **🚨 ABSOLUTE PROHIBITION ON REASONING TEXT 🚨**
+- **[CRITICAL] ABSOLUTE PROHIBITION ON REASONING TEXT [CRITICAL]**
 - **NEVER output any of the following phrases or similar reasoning text:**
   * "We have the opportunity to refine..."
   * "Based on the context information provided above..."
@@ -239,6 +254,11 @@ Given the context provided in the Chat History and the follow up question, pleas
 If the follow up question isn't correlated to the context provided in the Chat History, please just answer the follow up
 question, ignoring the context provided in the Chat History.
 Please also don't reformulate the follow up question, and write just a concise answer.
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT rephrase, repeat, or restate the user's question - answer directly
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT start with "Considering...", "Regarding...", "About your question...", or any phrase that rephrases the question
+- [CRITICAL] START YOUR ANSWER DIRECTLY with the answer content - do not preface it with a question or rephrasing
+- [CRITICAL] CRITICAL NAMING: ALWAYS use "Swiss Cottages Bhurban" - NEVER use "Swiss Chalet", "Swiss Chalet cottages", "mountain cottage", "pearl cottage", or any variation
+- DO NOT ask questions back to the user - answer directly.
 """
 
 
@@ -368,7 +388,7 @@ Generate a recommendation that:
 1. Is gentle and helpful (not pushy)
 2. Provides useful tips or insights
 3. Is relevant to the user's intent and collected information
-4. Uses emoji sparingly (💡 for tips)
+4. Uses emoji sparingly ([TIP] for tips)
 5. Is concise (2-3 lines max)
 
 Intent: {intent}
@@ -461,7 +481,13 @@ def generate_booking_nudge_prompt(slots: dict, user_journey: str = "") -> str:
 
 # Intent-specific prompt templates (Phase 3: Split Prompts by Intent)
 
-PRICING_PROMPT_TEMPLATE = """Context information is below.
+PRICING_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain pricing information, say "I don't have pricing information in my knowledge base."
+- DO NOT invent or generate prices from training data.
+
+Context information is below.
 ---------------------
 {context}
 ---------------------
@@ -488,8 +514,8 @@ RESPONSE LENGTH: Provide a complete, helpful answer. Provide direct answer first
 CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all necessary pricing information and calculations.
 
 CRITICAL RULES:
-- 🚨 ABSOLUTE PROHIBITION: DO NOT INVENT, GENERATE, OR HALLUCINATE PRICES 🚨
-- 🚨🚨🚨 COTTAGE PRICES ARE ALREADY PROVIDED IN THE CONTEXT ABOVE 🚨🚨🚨
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT INVENT, GENERATE, OR HALLUCINATE PRICES [CRITICAL]
+- [CRITICAL][CRITICAL][CRITICAL] COTTAGE PRICES ARE ALREADY PROVIDED IN THE CONTEXT ABOVE [CRITICAL][CRITICAL][CRITICAL]
 - **DO NOT search online for prices**
 - **DO NOT use dollar prices from your training data**
 - **DO NOT convert dollars to PKR**
@@ -498,7 +524,7 @@ CRITICAL RULES:
 - Use ONLY PKR prices that are EXPLICITLY stated in the context above
 - If context does NOT contain specific PKR amounts, DO NOT make up prices
 - DO NOT convert to lacs/lakhs
-- 🚨🚨🚨 ABSOLUTE PROHIBITION ON DOLLAR PRICES 🚨🚨🚨
+- [CRITICAL][CRITICAL][CRITICAL] ABSOLUTE PROHIBITION ON DOLLAR PRICES [CRITICAL][CRITICAL][CRITICAL]
 - DO NOT use dollar prices ($) - EVER
 - DO NOT say "$1,200", "$220", "$250", "$400", or any dollar amounts
 - DO NOT convert PKR to dollars
@@ -512,7 +538,7 @@ CRITICAL RULES:
 - If context has pricing, provide it directly EXACTLY as stated
 - **ONLY if context has NO pricing information at all (no "PKR", no "pricing", no rates), then say "I don't have specific pricing information in my knowledge base. Please contact us for current rates."**
 - **CRITICAL: If context contains "STRUCTURED PRICING ANALYSIS" or "TOTAL COST FOR X NIGHTS: PKR", this means pricing has been CALCULATED - you MUST provide this calculated total**
-- **🚨🚨🚨 MANDATORY: When user provides dates OR nights in their question, you MUST calculate total cost 🚨🚨🚨**
+- **[CRITICAL][CRITICAL][CRITICAL] MANDATORY: When user provides dates OR nights in their question, you MUST calculate total cost [CRITICAL][CRITICAL][CRITICAL]**
 - **CASE 1: If user provides dates (e.g., "i will stay from 10 march to 19 march"):**
   1. **EXTRACT the dates:**
      - Start: 10 March
@@ -541,26 +567,26 @@ CRITICAL RULES:
      - "For 5 nights at Cottage 9, the estimated total cost is PKR XXX (based on a typical weekday/weekend mix)."
      - "Price range: PKR XXX (all weekdays) to PKR XXX (all weekends)."
      - "The exact price depends on which days are weekdays vs weekends."
-- **🚨 CRITICAL: DO NOT ask for dates if dates OR nights are in the question - calculate immediately**
-- **🚨 CRITICAL: DO NOT say "I need dates" if nights are provided - calculate using nights**
-- **🚨 CRITICAL: DO NOT say "I need check-in dates" if nights are provided - provide estimated pricing**
-- **🚨 CRITICAL: DO NOT ask for guest count if already mentioned - use the provided number**
-- **🚨 CRITICAL: If dates OR nights are provided, you MUST calculate and provide the total cost - do not defer to Airbnb or website**
-- **🚨 CRITICAL: If user says "i will stay for 5 nights", calculate estimated total immediately using typical weekday/weekend mix**
+- **[CRITICAL] CRITICAL: DO NOT ask for dates if dates OR nights are in the question - calculate immediately**
+- **[CRITICAL] CRITICAL: DO NOT say "I need dates" if nights are provided - calculate using nights**
+- **[CRITICAL] CRITICAL: DO NOT say "I need check-in dates" if nights are provided - provide estimated pricing**
+- **[CRITICAL] CRITICAL: DO NOT ask for guest count if already mentioned - use the provided number**
+- **[CRITICAL] CRITICAL: If dates OR nights are provided, you MUST calculate and provide the total cost - do not defer to Airbnb or website**
+- **[CRITICAL] CRITICAL: If user says "i will stay for 5 nights", calculate estimated total immediately using typical weekday/weekend mix**
 - Calculate totals when nights are specified, but ONLY using prices from context
 - DO NOT say "I don't have direct access to real-time pricing" or "I'm a large language model" - if context has pricing data, USE IT
 - DO NOT suggest visiting Airbnb or website if context contains calculated pricing - provide the calculated price directly
 - DO NOT use prices like "PKR 18,000", "PKR 12,000", "PKR 24,000" unless they appear in the context above
 
-🚨 ABSOLUTE PROHIBITION: DO NOT OUTPUT TEMPLATES OR INSTRUCTIONS 🚨
-- If context contains "🚨 CRITICAL PRICING INFORMATION" or "STRUCTURED PRICING ANALYSIS" or "⚠️ MANDATORY INSTRUCTIONS FOR LLM" or "GENERAL PRICING RATES", these contain PRICING DATA that you MUST USE
+[CRITICAL] ABSOLUTE PROHIBITION: DO NOT OUTPUT TEMPLATES OR INSTRUCTIONS [CRITICAL]
+- If context contains "[CRITICAL] CRITICAL PRICING INFORMATION" or "STRUCTURED PRICING ANALYSIS" or "[WARNING] MANDATORY INSTRUCTIONS FOR LLM" or "GENERAL PRICING RATES", these contain PRICING DATA that you MUST USE
 - **CRITICAL: If context contains "GENERAL PRICING RATES" followed by pricing information (e.g., "Cottage 9: PKR 33,000 per night on weekdays, PKR 38,000 per night on weekends"), this IS the pricing information you must provide to the user**
-- **The template markers (🚨, ⚠️) and instruction text are for YOU to understand the data - but the PRICING DATA itself (the rates, amounts, cottage numbers) is what the user needs**
-- **DO NOT START YOUR ANSWER WITH "⚠️" OR "🚨" OR "GENERAL" - these are template markers, NOT part of your answer**
-- **DO NOT output "⚠️ GENERAL PRICING QUERY DETECTED" or similar template text**
+- **The template markers ([CRITICAL], [WARNING]) and instruction text are for YOU to understand the data - but the PRICING DATA itself (the rates, amounts, cottage numbers) is what the user needs**
+- **DO NOT START YOUR ANSWER WITH "[WARNING]" OR "[CRITICAL]" OR "GENERAL" - these are template markers, NOT part of your answer**
+- **DO NOT output "[WARNING] GENERAL PRICING QUERY DETECTED" or similar template text**
 - **START YOUR ANSWER DIRECTLY with the actual pricing information (e.g., "Cottage 9 costs PKR 33,000...")**
 - DO NOT copy, repeat, or output ANY part of the template markers or instruction text to the user
-- DO NOT include the emoji markers (🚨, ⚠️, 🎯) in your answer
+- DO NOT include the emoji markers ([CRITICAL], [WARNING], 🎯) in your answer
 - DO NOT include the instruction numbers (1., 2., 3., etc.) in your answer
 - DO NOT include phrases like "CRITICAL PRICING INFORMATION", "MANDATORY INSTRUCTIONS", "STRUCTURED PRICING ANALYSIS", "GENERAL PRICING QUERY DETECTED" in your answer
 - **BUT DO extract and provide the actual pricing data (cottage numbers, PKR amounts, weekday/weekend rates) from the template**
@@ -574,7 +600,11 @@ Question: {question}
 Answer:"""
 
 
-AVAILABILITY_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+AVAILABILITY_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain the answer, say "I don't have that information in my knowledge base."
+
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts, or monetary information
 - DO NOT say "PKR 32,000", "PKR 38,000", "costs", "pricing", "price", "rate", "per night"
@@ -608,26 +638,26 @@ RESPONSE LENGTH: Provide a complete, helpful answer. Include all relevant bookin
 CRITICAL RULES - READ CAREFULLY:
 - Swiss Cottages are available year-round, subject to availability
 
-🚨🚨🚨 MANDATORY COTTAGE PRIORITIZATION 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] MANDATORY COTTAGE PRIORITIZATION [CRITICAL][CRITICAL][CRITICAL]:
 - **IF the user does NOT specify a cottage number**, you MUST prioritize and mention Cottage 9 and Cottage 11 FIRST
 - **DO NOT mention Cottage 7** unless the user specifically asks for "Cottage 7" or "cottage 7"
 - **Your response MUST start with Cottage 9 and Cottage 11**, not with "cottages 7, 9, and 11"
 - Example CORRECT format: "You can book Cottage 9 or Cottage 11 at Swiss Cottages Bhurban..."
-- Example WRONG format: "Our cottages available for booking include 7, 9, and 11-cottages" ❌
+- Example WRONG format: "Our cottages available for booking include 7, 9, and 11-cottages" [NO]
 
-🚨🚨🚨 MANDATORY AIRBNB LINKS 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] MANDATORY AIRBNB LINKS [CRITICAL][CRITICAL][CRITICAL]:
 - **YOU MUST include Airbnb links in your response**
 - Cottage 9 Airbnb: https://www.airbnb.com/rooms/651168099240245080
 - Cottage 11 Airbnb: https://www.airbnb.com/rooms/886682083069412842
 - Format: "Book Cottage 9 on Airbnb: [link]" and "Book Cottage 11 on Airbnb: [link]"
 - Only include Cottage 7 Airbnb link if user specifically asks for Cottage 7
 
-🚨🚨🚨 MANDATORY BOOKING INFORMATION 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] MANDATORY BOOKING INFORMATION [CRITICAL][CRITICAL][CRITICAL]:
 - Website: https://swisscottagesbhurban.com (format correctly with proper URL structure)
 - Contact Manager: +92 300 1218563 (WhatsApp)
 - Include both website and Airbnb links in your response
 
-🚨🚨🚨 RESPONSE FORMAT REQUIREMENTS 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] RESPONSE FORMAT REQUIREMENTS [CRITICAL][CRITICAL][CRITICAL]:
 1. Start by mentioning Cottage 9 and Cottage 11 (NOT Cottage 7)
 2. Include Airbnb links for Cottage 9 and Cottage 11
 3. Mention the website link (properly formatted)
@@ -636,13 +666,17 @@ CRITICAL RULES - READ CAREFULLY:
 6. Complete your answer fully - do not stop mid-sentence
 7. Use all available tokens to provide a complete response
 
-🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
+[CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
 
 Question: {question}
 Answer:"""
 
 
-SAFETY_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+SAFETY_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain the answer, say "I don't have that information in my knowledge base."
+
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts, or monetary information
 - DO NOT say "PKR 32,000", "PKR 38,000", "costs", "pricing", "price", "rate", "per night"
@@ -677,26 +711,44 @@ RESPONSE LENGTH: Provide a complete answer with key safety points. Be concise bu
 CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all relevant safety information.
 
 CRITICAL RULES:
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT rephrase, repeat, or restate the user's question - answer directly
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT start with "Considering your stay...", "Regarding your question...", "About your question...", or any phrase that rephrases the question
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "is it safe?" or any variation of the question - just answer with safety information
+- [CRITICAL] START YOUR ANSWER DIRECTLY with safety information - do not preface it with a question or rephrasing
 - Focus on safety and security features
 - Mention guards, gated community if in context
-- 🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT ask questions back to the user - provide a direct answer immediately
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I'd love to know", "I'd like to know", "Could you tell me", "I recommend verifying", "contact management", "check with management", "verify with management", or any phrase that asks the user for information or defers to external sources
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "we can't provide a definitive answer", "I can't provide a definitive answer", "we can't provide", "it's essential to note that we can't provide", or any variation
+- [CRITICAL] CRITICAL NAMING: ALWAYS use "Swiss Cottages Bhurban" - NEVER use "mountain cottage", "pearl cottage", "Pearl Cottage", "Swiss Chalet", "Swiss Chalet cottages", or any variation
+- If context mentions "mountain cottage", "pearl cottage", "Swiss Chalet", or any incorrect name, replace it with "Swiss Cottages Bhurban" in your answer
+- Answer the question directly with the safety information available - do not ask follow-up questions
+- If context contains ANY safety-related terms (safe, safety, security, guard, guards, gated, secure, surveillance, emergency), you MUST provide that information directly
+- NEVER defer to external sources, management, or official sources if context has safety information
 
-🚨🚨🚨 HANDLING GENERAL VS SPECIFIC INFORMATION 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] HANDLING GENERAL VS SPECIFIC INFORMATION [CRITICAL][CRITICAL][CRITICAL]:
 - **IF user asks about safety "for each cottage", "in each cottage", or "for Cottage X, Y, Z"** BUT context only contains general/overall safety information:
   - **DO NOT say "I don't have enough information" or "I couldn't find specific details"**
   - **DO NOT say "Unfortunately, I don't have information about each cottage"**
-  - **INSTEAD: Provide the general safety information from context**
+  - **DO NOT say "we can't provide a definitive answer" or "it's essential to note that we can't provide"**
+  - **DO NOT say "I recommend verifying" or "contact management"**
+  - **INSTEAD: Provide the general safety information from context IMMEDIATELY**
   - **State that these safety measures apply to ALL cottages (Cottage 7, Cottage 9, and Cottage 11)**
   - **Use phrases like "All cottages have...", "The cottages include...", or "Each cottage features..."**
   - **Example: If context mentions "gated community with security guards" and user asks "safety for each cottage", respond: "All cottages at Swiss Cottages Bhurban are located in a secure gated community with security guards. These safety measures apply to Cottage 7, Cottage 9, and Cottage 11."**
-- **IF context contains general safety information, ALWAYS provide it - do not say information is unavailable**
-- **ONLY say "I don't have information" if context truly has NO safety information at all**
+- **IF context contains ANY safety-related terms (safe, safety, security, guard, guards, gated, secure, surveillance, emergency), you MUST provide that information - NEVER say information is unavailable**
+- **ONLY say "I don't have information" if context truly has ABSOLUTELY NO safety-related terms at all (no safe, safety, security, guard, guards, gated, secure, surveillance, emergency)**
 
 Question: {question}
 Answer:"""
 
 
-ROOMS_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+ROOMS_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain the answer, say "I don't have that information in my knowledge base."
+
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts, or monetary information
 - DO NOT say "PKR 32,000", "PKR 38,000", "costs", "pricing", "price", "rate", "per night"
@@ -740,7 +792,7 @@ CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all rel
 CRITICAL RULES:
 - Focus on cottage types/properties (Cottage 7, 9, 11)
 - Include capacity: base (up to 6) and max (up to 9 with confirmation)
-- 🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts, or any monetary information
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts, or any monetary information
 - Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree" or "Bhurban, Murree, Pakistan" - NEVER "Azad Kashmir" or "Patriata"
 - Use "cottage_id" terminology, NOT "room_type"
 - Answer the question directly - do not add extra information
@@ -749,7 +801,7 @@ Question: {question}
 Answer:"""
 
 
-FACILITIES_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+FACILITIES_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts, or monetary information
 - DO NOT say "PKR 32,000", "PKR 38,000", "costs", "pricing", "price", "rate", "per night"
@@ -785,28 +837,34 @@ CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all rel
 
 CRITICAL RULES:
 - Focus on facilities and amenities
-- 🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts
 
-🚨🚨🚨 HANDLING GENERAL VS SPECIFIC INFORMATION 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] HANDLING GENERAL VS SPECIFIC INFORMATION [CRITICAL][CRITICAL][CRITICAL]:
 - **CRITICAL: If user asks about facilities "in each cottage", "for each cottage", or "for Cottage X, Y, Z"**:
   - **FIRST: Check if context contains ANY facilities information (even if general/overall)**
   - **IF context has ANY facilities information (general or specific):**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I couldn't find", "I was unable to find", "I don't have", "unfortunately", "I recommend checking", "please contact", "check the official website", "reach out to", "contact the establishment", or ANY phrase indicating information is unavailable**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I couldn't find any information on" or "I couldn't find specific details"**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I would expect" or "it's likely to include" - if context has information, state it directly**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I couldn't find", "I was unable to find", "I don't have", "unfortunately", "I recommend checking", "please contact", "check the official website", "reach out to", "contact the establishment", or ANY phrase indicating information is unavailable**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I couldn't find any information on" or "I couldn't find specific details"**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I would expect" or "it's likely to include" - if context has information, state it directly**
     - **INSTEAD: IMMEDIATELY provide the facilities information from context (even if it's general)**
     - **State that these facilities apply to ALL cottages (Cottage 7, Cottage 9, and Cottage 11)**
     - **Use phrases like "All cottages have...", "The cottages include...", or "Each cottage features..."**
     - **Example: If context mentions "fully equipped kitchens" or "kitchen" or "microwave, oven, kettle" and user asks "kitchen facilities in each cottage", respond: "All cottages at Swiss Cottages Bhurban have fully equipped kitchens that include: microwave, oven, kettle, refrigerator, cookware, and utensils. These kitchen facilities are available in Cottage 7, Cottage 9, and Cottage 11."**
     - **If context mentions kitchen facilities in general terms, extract and provide them - do not say you couldn't find specific details**
   - **ONLY if context has ABSOLUTELY NO facilities information at all (no mention of kitchen, facilities, amenities, equipment, etc.), then you may say information is unavailable**
-- **🚨 CRITICAL RULE: If context contains ANY mention of the topic (kitchen, facilities, amenities, equipment), you MUST provide that information - never say "I couldn't find"**
+- **[CRITICAL] CRITICAL RULE: If context contains ANY mention of the topic (kitchen, facilities, amenities, equipment), you MUST provide that information - never say "I couldn't find"**
 
 Question: {question}
 Answer:"""
 
 
-LOCATION_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+LOCATION_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain the answer, say "I don't have that information in my knowledge base."
+- DO NOT use locations like "Bhubaneswar" (India) or "Azad Kashmir" from training data - these are WRONG
+- If context mentions "Bhurban" or "Murree", use that EXACTLY. Do not substitute with other locations.
+
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts for cottages OR attractions
 - DO NOT say "PKR 32,000", "PKR 38,000", "costs", "pricing", "price", "rate", "per night"
@@ -814,12 +872,37 @@ LOCATION_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨�
 - This is a LOCATION query, NOT a pricing query
 - If you mention pricing, your answer is WRONG
 
-**LOCATION RULE - MANDATORY**
-- Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
-- NEVER say "Azad Kashmir", "Patriata", or "PC Bhurban" for cottage location
-- The cottages are in Murree (Murree Hills), NOT in Azad Kashmir
-- PC Bhurban is a viewpoint that overlooks Azad Kashmir, but the cottages themselves are in Murree
-- If you mention "Azad Kashmir" for cottage location, your answer is WRONG
+**ABSOLUTE PROHIBITION ON QUESTION REPHRASING**
+- [CRITICAL] DO NOT rephrase, repeat, or restate the user's question - answer directly
+- [CRITICAL] DO NOT start with "Considering your stay...", "Regarding your question...", "About your question...", or any phrase that rephrases the question
+- [CRITICAL] START YOUR ANSWER DIRECTLY with location information - do not preface it with a question or rephrasing
+- Example of WRONG: "Considering your stay at our Swiss Chalet cottages, they are located..."
+- Example of CORRECT: "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
+
+**ABSOLUTE PROHIBITION ON INCORRECT NAMING**
+- [CRITICAL] NEVER say "Swiss Chalet", "Swiss Chalet cottages", "mountain cottage", "pearl cottage", "Pearl Cottage"
+- [CRITICAL] ALWAYS use "Swiss Cottages Bhurban" or "Swiss Cottages" - this is the ONLY correct name
+- If context mentions "Swiss Chalet" or any incorrect name, REPLACE it with "Swiss Cottages Bhurban" in your answer
+
+**LOCATION RULE - MANDATORY AND ABSOLUTE - READ CAREFULLY**
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - this is 100% WRONG
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location - this is 100% WRONG
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "PC Bhurban" is where the cottages are - PC Bhurban is a nearby hotel/viewpoint, NOT where cottages are located
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "near Patriata" or "Patriata chairlift" for Swiss Cottages location
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir region" for Swiss Cottages location
+- CORRECT LOCATION (USE THIS EXACTLY - COPY IT VERBATIM): "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
+- ALTERNATIVE CORRECT FORMATS: "Swiss Cottages Bhurban, Bhurban, Murree, Pakistan" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
+- The cottages are in Murree Hills, Bhurban, Pakistan - NOT in Azad Kashmir, NOT in Patriata
+- PC Bhurban (Pearl Continental Bhurban) is a nearby hotel/viewpoint that overlooks Azad Kashmir, but Swiss Cottages themselves are in Murree Hills, Bhurban, Pakistan
+- Patriata is a different location entirely, NOT where cottages are
+- If context mentions "Azad Kashmir" or "Patriata" for cottage location, COMPLETELY IGNORE IT - it is 100% WRONG - use ONLY the correct location above
+- EXAMPLES OF WRONG ANSWERS (DO NOT GENERATE THESE):
+  * "Swiss Chalet cottages are located near Patriata, in Azad Kashmir" - WRONG
+  * "Swiss Cottages is located in Azad Kashmir" - WRONG
+  * "Swiss Cottages is located in Patriata" - WRONG
+  * "Swiss Cottages is located near Patriata, in Azad Kashmir" - WRONG
+- EXAMPLE OF CORRECT ANSWER (USE THIS FORMAT):
+  * "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan. [MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
 
 Context information is below.
 ---------------------
@@ -828,8 +911,11 @@ Context information is below.
 
 SYSTEM FACTS (AUTHORITATIVE):
 {common_facts}
-- PC Bhurban is a viewpoint that overlooks Azad Kashmir, but the cottages themselves are in Murree (Murree Hills)
+- CORRECT LOCATION: Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan
+- Location: Bhurban, Murree, Pakistan (in Murree Hills, NOT Azad Kashmir, NOT Patriata)
+- PC Bhurban (Pearl Continental Bhurban) is a nearby hotel/viewpoint that overlooks Azad Kashmir, but Swiss Cottages themselves are in Murree Hills, Bhurban, Pakistan
 - Patriata is a different location, NOT where cottages are
+- Google Maps link: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
 
 ALLOWED FIELDS:
 - Location information (MUST be "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan")
@@ -849,18 +935,36 @@ RESPONSE LENGTH: Provide a complete answer with location and nearby attractions.
 
 CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all relevant location information.
 
-CRITICAL RULES:
-- Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
-- 🚨 NEVER say "Azad Kashmir", "Patriata", or "PC Bhurban" for cottage location
-- 🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing for cottages OR attractions unless explicitly asked
-- DO NOT use cottage prices (PKR 32,000, PKR 38,000) for attractions
-- Describe attractions without pricing unless pricing is explicitly in context for that specific attraction
+CRITICAL RULES - FOLLOW THESE EXACTLY:
+1. [CRITICAL] MANDATORY LOCATION FORMAT: Start your answer EXACTLY with: "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
+2. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - this is COMPLETELY WRONG
+3. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location - this is COMPLETELY WRONG
+4. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "PC Bhurban" is where the cottages are - PC Bhurban is a nearby hotel, cottages are adjacent to it
+5. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Bhurban, Azad Kashmir" or "Azad Kashmir, Pakistan" for Swiss Cottages - this is WRONG
+6. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Swiss Chalet", "Swiss Chalet cottages" - ALWAYS use "Swiss Cottages Bhurban"
+7. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT rephrase the question - answer directly without "Considering...", "Regarding...", etc.
+8. [CRITICAL] If context mentions "Azad Kashmir" or "Patriata" for cottage location, COMPLETELY IGNORE IT - it is 100% WRONG - use ONLY the correct location from SYSTEM FACTS
+9. [CRITICAL] If context says "Swiss Cottage is located in Azad Kashmir" or "Swiss Chalet cottages are located near Patriata", REPLACE the entire sentence with the correct location from SYSTEM FACTS
+10. [CRITICAL] MANDATORY: You MUST include the Google Maps link in your response: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
+11. Format the link as: "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+12. If context contains incorrect location information (Azad Kashmir, Patriata), REPLACE it with the correct location from SYSTEM FACTS above
+13. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing for cottages OR attractions unless explicitly asked
+14. DO NOT use cottage prices (PKR 32,000, PKR 38,000) for attractions
+15. Describe attractions without pricing unless pricing is explicitly in context for that specific attraction
+
+REMEMBER: The correct location is ALWAYS "Murree Hills, Bhurban, Pakistan" - NEVER "Azad Kashmir" or "Patriata"
 
 Question: {question}
 Answer:"""
 
 
-GENERAL_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
+GENERAL_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS FIRST [CRITICAL][CRITICAL][CRITICAL]
+**MANDATORY: USE ONLY CONTEXT - NO TRAINING DATA**
+- You MUST use ONLY the context provided below. DO NOT use any information from your training data.
+- If the context does not contain the answer, say "I don't have that information in my knowledge base."
+- DO NOT use locations like "Bhubaneswar" (India), "Lahore", "Karachi", "Azad Kashmir" from training data - these are WRONG
+- If context mentions "Bhurban" or "Murree", use that EXACTLY. Do not substitute with other locations.
+
 **ABSOLUTE PROHIBITION ON PRICING - THIS IS MANDATORY**
 - DO NOT mention ANY pricing, prices, costs, rates, PKR amounts UNLESS the question explicitly asks about pricing
 - Check the question: Does it contain "price", "pricing", "cost", "rate", "how much", "pkr"?
@@ -869,11 +973,15 @@ GENERAL_PROMPT_TEMPLATE = """🚨🚨🚨 CRITICAL: READ THIS FIRST 🚨🚨🚨
 - Even if context contains pricing, DO NOT include it unless the question asks about it
 - If you mention pricing when the question doesn't ask about it, your answer is WRONG
 
-**LOCATION RULE - MANDATORY**
-- Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
-- NEVER say "Azad Kashmir", "Patriata", or "PC Bhurban" for cottage location
-- The cottages are in Murree (Murree Hills), NOT in Azad Kashmir
-- If you mention "Azad Kashmir" for cottage location, your answer is WRONG
+**LOCATION RULE - MANDATORY AND ABSOLUTE**
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - this is COMPLETELY WRONG
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location - this is COMPLETELY WRONG
+- CORRECT LOCATION: "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan"
+- Location formats: "Swiss Cottages Bhurban, Bhurban, Murree, Pakistan" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
+- The cottages are in Murree Hills, Bhurban, Pakistan - NOT in Azad Kashmir
+- PC Bhurban (Pearl Continental Bhurban) is a nearby hotel/viewpoint, NOT where cottages are - cottages are adjacent to it
+- If context mentions "Azad Kashmir" for cottage location, COMPLETELY IGNORE IT - use ONLY the correct location above
+- If question is about location, you MUST include Google Maps link: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
 
 Context information is below.
 ---------------------
@@ -898,24 +1006,27 @@ CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all nec
 
 CRITICAL RULES:
 - Answer using ONLY context information
-- 🚨 ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts unless question contains: "price", "pricing", "cost", "rate", "how much", "pkr"
-- Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan" - NEVER "Azad Kashmir"
+- [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing, prices, costs, rates, PKR amounts unless question contains: "price", "pricing", "cost", "rate", "how much", "pkr"
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - if context mentions this, IGNORE IT and use "Murree Hills, Bhurban, Pakistan"
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location
+- Location MUST be "Swiss Cottages Bhurban, Bhurban, Murree, Pakistan" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan" - NEVER "Azad Kashmir"
+- If question is about location, you MUST include Google Maps link: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
 - Be helpful and conversational but concise
 
-🚨🚨🚨 HANDLING GENERAL VS SPECIFIC INFORMATION 🚨🚨🚨:
+[CRITICAL][CRITICAL][CRITICAL] HANDLING GENERAL VS SPECIFIC INFORMATION [CRITICAL][CRITICAL][CRITICAL]:
 - **CRITICAL: If user asks about specific details "for each cottage", "in each cottage", or "for Cottage X, Y, Z"**:
   - **FIRST: Check if context contains ANY information about the topic (even if general/overall)**
   - **IF context has ANY information about the topic (general or specific):**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I couldn't find", "I was unable to find", "I don't have", "unfortunately", "I recommend checking", "please contact", "check the official website", "reach out to", "contact the establishment", or ANY phrase indicating information is unavailable**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I don't have enough information to give a definitive answer"**
-    - **🚨 ABSOLUTE PROHIBITION: DO NOT say "I would expect" or "it's likely to include" - if context has information, state it directly**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I couldn't find", "I was unable to find", "I don't have", "unfortunately", "I recommend checking", "please contact", "check the official website", "reach out to", "contact the establishment", or ANY phrase indicating information is unavailable**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I don't have enough information to give a definitive answer"**
+    - **[CRITICAL] ABSOLUTE PROHIBITION: DO NOT say "I would expect" or "it's likely to include" - if context has information, state it directly**
     - **INSTEAD: IMMEDIATELY provide the information from context (even if it's general)**
     - **State that this information applies to ALL cottages (Cottage 7, Cottage 9, and Cottage 11) when relevant**
     - **Use phrases like "All cottages have...", "The cottages include...", or "Each cottage features..."**
     - **Example: If context has general kitchen info and user asks "kitchen facilities in each cottage", respond with the general kitchen information and state it applies to all cottages**
     - **If context mentions the topic in general terms, extract and provide that information - do not say you couldn't find specific details**
   - **ONLY if context has ABSOLUTELY NO information about the topic at all, then you may say information is unavailable**
-- **🚨 CRITICAL RULE: If context contains ANY mention of the topic, you MUST provide that information - never say "I couldn't find"**
+- **[CRITICAL] CRITICAL RULE: If context contains ANY mention of the topic, you MUST provide that information - never say "I couldn't find"**
 
 Question: {question}
 Answer:"""

@@ -1036,6 +1036,166 @@ def validate_and_fix_currency(answer: str, context: str = "") -> str:
     return converted_answer
 
 
+def fix_incorrect_naming(answer: str) -> str:
+    """
+    Fix incorrect property naming in answers.
+    Replaces "Swiss Chalet", "Swiss Chalet cottages", "mountain cottage", "pearl cottage" with "Swiss Cottages Bhurban".
+    
+    Args:
+        answer: The answer text that may contain incorrect naming
+        
+    Returns:
+        Answer text with incorrect naming replaced
+    """
+    if not answer:
+        return answer
+    
+    answer_lower = answer.lower()
+    fixed_answer = answer
+    
+    # Replace incorrect names with correct name
+    incorrect_name_patterns = [
+        (r"swiss\s+chalet\s+cottages?", "Swiss Cottages Bhurban"),
+        (r"swiss\s+chalet", "Swiss Cottages Bhurban"),
+        (r"mountain\s+cottage", "Swiss Cottages Bhurban"),
+        (r"pearl\s+cottage", "Swiss Cottages Bhurban"),
+    ]
+    
+    for pattern, replacement in incorrect_name_patterns:
+        if re.search(pattern, answer_lower):
+            logger.warning(f"Found incorrect naming in answer, replacing: {pattern}")
+            fixed_answer = re.sub(pattern, replacement, fixed_answer, flags=re.IGNORECASE)
+    
+    return fixed_answer
+
+
+def fix_question_rephrasing(answer: str, question: str = "") -> str:
+    """
+    Remove question rephrasing from answers.
+    Removes phrases like "Considering your stay...", "Regarding your question...", etc.
+    
+    Args:
+        answer: The answer text that may contain question rephrasing
+        question: The original question (optional, for better detection)
+        
+    Returns:
+        Answer text with question rephrasing removed
+    """
+    if not answer:
+        return answer
+    
+    answer_lower = answer.lower()
+    fixed_answer = answer
+    
+    # Patterns that indicate question rephrasing
+    rephrasing_patterns = [
+        r"^considering\s+(?:your\s+)?(?:stay|question|inquiry)[^.]*[.,]\s*",
+        r"^regarding\s+(?:your\s+)?(?:question|inquiry|stay)[^.]*[.,]\s*",
+        r"^about\s+(?:your\s+)?(?:question|inquiry)[^.]*[.,]\s*",
+        r"^to\s+answer\s+(?:your\s+)?(?:question|inquiry)[^.]*[.,]\s*",
+        r"^in\s+response\s+to\s+(?:your\s+)?(?:question|inquiry)[^.]*[.,]\s*",
+    ]
+    
+    # Check if answer starts with a rephrasing pattern
+    for pattern in rephrasing_patterns:
+        if re.match(pattern, answer_lower):
+            logger.warning(f"Found question rephrasing in answer, removing: {pattern}")
+            fixed_answer = re.sub(pattern, "", fixed_answer, flags=re.IGNORECASE)
+            # Capitalize first letter if needed
+            if fixed_answer and fixed_answer[0].islower():
+                fixed_answer = fixed_answer[0].upper() + fixed_answer[1:]
+            break
+    
+    # Also check if answer contains the question itself (repeated)
+    if question:
+        question_lower = question.lower().strip()
+        # Remove question marks and normalize
+        question_normalized = re.sub(r'[?.,!]', '', question_lower)
+        if question_normalized and len(question_normalized) > 10:
+            # Check if answer starts with a variation of the question
+            answer_start = answer_lower[:len(question_normalized) + 20]  # Check first part
+            if question_normalized in answer_start:
+                # Find where the actual answer starts (after the question)
+                question_pos = answer_lower.find(question_normalized)
+                if question_pos < 50:  # Question appears near the start
+                    # Extract text after the question
+                    after_question = answer[question_pos + len(question):].strip()
+                    if after_question and len(after_question) > 20:
+                        # Check if it starts with common separators
+                        after_question = re.sub(r'^[.,;:\s]+', '', after_question)
+                        if after_question:
+                            fixed_answer = after_question
+                            logger.warning("Removed question repetition from answer start")
+    
+    return fixed_answer
+
+
+def fix_incorrect_location_mentions(answer: str) -> str:
+    """
+    Fix incorrect location mentions in answers.
+    Replaces "Azad Kashmir" and "Patriata" with correct location information.
+    
+    Args:
+        answer: The answer text that may contain incorrect location mentions
+        
+    Returns:
+        Answer text with incorrect location mentions replaced
+    """
+    if not answer:
+        return answer
+    
+    answer_lower = answer.lower()
+    
+    # Check if answer mentions incorrect locations for Swiss Cottages
+    incorrect_location_patterns = [
+        # Pattern: "Swiss Cottage is located in Bhurban, a popular hill station in Azad Kashmir"
+        (r"swiss\s+cottages?\s+(?:is|are)\s+located\s+in\s+bhurban[^.]*azad\s+kashmir", "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan"),
+        # Pattern: "Swiss Cottage is located in Azad Kashmir"
+        (r"swiss\s+cottages?\s+(?:is|are|located|in)\s+(?:in\s+)?azad\s+kashmir", "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan"),
+        # Pattern: "Swiss Cottage is located in Patriata"
+        (r"swiss\s+cottages?\s+(?:is|are|located|in)\s+(?:in\s+)?patriata", "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan"),
+        # Pattern: "located in Azad Kashmir"
+        (r"located\s+in\s+azad\s+kashmir", "located in the Murree Hills, Bhurban, Pakistan"),
+        # Pattern: "in Azad Kashmir, Pakistan"
+        (r"in\s+azad\s+kashmir,\s+pakistan", "in the Murree Hills, Bhurban, Pakistan"),
+        # Pattern: "Azad Kashmir, Pakistan"
+        (r"azad\s+kashmir,\s+pakistan", "Murree Hills, Bhurban, Pakistan"),
+        # Pattern: "Bhurban, Azad Kashmir"
+        (r"bhurban[^,]*,\s*azad\s+kashmir", "Bhurban, Murree, Pakistan"),
+        # Pattern: "Bhurban, a popular hill station in Azad Kashmir"
+        (r"bhurban[^.]*in\s+azad\s+kashmir", "Bhurban, Murree, Pakistan"),
+        # Pattern: "Patriata, Pakistan"
+        (r"patriata,\s+pakistan", "Murree Hills, Bhurban, Pakistan"),
+    ]
+    
+    fixed_answer = answer
+    for pattern, replacement in incorrect_location_patterns:
+        if re.search(pattern, answer_lower):
+            logger.warning(f"Found incorrect location mention in answer, replacing: {pattern}")
+            fixed_answer = re.sub(pattern, replacement, fixed_answer, flags=re.IGNORECASE)
+            # Also ensure Google Maps link is included if it's a location-related answer
+            if "location" in answer_lower or "located" in answer_lower or "where" in answer_lower:
+                if "goo.gl/maps" not in fixed_answer.lower() and "maps" not in fixed_answer.lower():
+                    fixed_answer += "\n\n[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+    
+    # Additional aggressive check: if answer mentions "Azad Kashmir" in any context about Swiss Cottages location, replace it
+    if "azad kashmir" in answer_lower and ("swiss" in answer_lower or "cottage" in answer_lower or "location" in answer_lower or "located" in answer_lower or "bhurban" in answer_lower):
+        # Replace "Azad Kashmir" with "Murree Hills, Bhurban, Pakistan" when talking about Swiss Cottages
+        fixed_answer = re.sub(
+            r"\bazad\s+kashmir\b",
+            "Murree Hills, Bhurban, Pakistan",
+            fixed_answer,
+            flags=re.IGNORECASE
+        )
+        logger.warning("Replaced 'Azad Kashmir' with correct location in answer")
+        
+        # Ensure Google Maps link is included for location answers
+        if ("location" in answer_lower or "located" in answer_lower or "where" in answer_lower) and "goo.gl/maps" not in fixed_answer.lower():
+            fixed_answer += "\n\n[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+    
+    return fixed_answer
+
+
 def clean_answer_text(answer: str) -> str:
     """
     Remove LLM reasoning and process text from answer.
@@ -1374,6 +1534,55 @@ def clean_answer_text(answer: str) -> str:
     for pattern in start_reasoning_patterns:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
     
+    # CRITICAL: Remove example/placeholder URLs that are from training data, not from FAQ documents
+    # These are common placeholder URLs that LLMs generate from training data
+    placeholder_url_patterns = [
+        r"https?://(www\.)?example\.com[^\s\)]*",  # example.com URLs
+        r"https?://example\.com[^\s\)]*",  # example.com without www
+        r"https?://(www\.)?example\.org[^\s\)]*",  # example.org URLs
+        r"https?://(www\.)?placeholder\.com[^\s\)]*",  # placeholder.com URLs
+        r"https?://(www\.)?test\.com[^\s\)]*",  # test.com URLs
+        r"https?://(www\.)?sample\.com[^\s\)]*",  # sample.com URLs
+    ]
+    
+    for pattern in placeholder_url_patterns:
+        # Remove the entire line if it contains a placeholder URL
+        lines = cleaned.split('\n')
+        filtered_lines = []
+        for line in lines:
+            if not re.search(pattern, line, flags=re.IGNORECASE):
+                filtered_lines.append(line)
+            else:
+                logger.warning(f"Removed line with placeholder URL: {line[:100]}")
+        cleaned = '\n'.join(filtered_lines)
+        
+        # Also remove the URL itself if it appears in the middle of a line
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    
+    # Remove lines that only contain placeholder text like "Take a look at our photo gallery:" without real URLs
+    # This catches cases where LLM generates example text from training data
+    placeholder_text_patterns = [
+        r"^Take a look at our photo gallery:\s*$",
+        r"^Visit our photo gallery:\s*$",
+        r"^Check out our photo gallery:\s*$",
+        r"^See our photo gallery:\s*$",
+        r"^View our photo gallery:\s*$",
+        r"^Take a look at our photo gallery:\s*https?://example\.com",  # With example.com URL
+    ]
+    
+    lines = cleaned.split('\n')
+    filtered_lines = []
+    for line in lines:
+        is_placeholder = False
+        for pattern in placeholder_text_patterns:
+            if re.match(pattern, line, flags=re.IGNORECASE):
+                is_placeholder = True
+                logger.warning(f"Removed placeholder text line: {line}")
+                break
+        if not is_placeholder:
+            filtered_lines.append(line)
+    cleaned = '\n'.join(filtered_lines)
+    
     # Remove extra whitespace
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     cleaned = cleaned.strip()
@@ -1614,7 +1823,8 @@ def check_document_relevance(query: str, documents: list) -> tuple[bool, str]:
     
     # Exception: For safety/security queries, allow documents with safety keywords even if they don't explicitly mention Swiss Cottages
     # (since they're from the knowledge base, they're implicitly about Swiss Cottages)
-    is_safety_query = any(word in query_lower for word in ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"])
+    # Safety query detection - include "is it safe" pattern explicitly
+    is_safety_query = any(word in query_lower for word in ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"]) or "is it safe" in query_lower
     safety_keywords = ["guard", "guards", "security", "gated community", "secure", "safety", "emergency", "safety measures", "security measures"]
     has_safety_content = any(keyword in documents_text for keyword in safety_keywords)
     
@@ -1637,6 +1847,38 @@ def check_document_relevance(query: str, documents: list) -> tuple[bool, str]:
     pearl_continental_indicators = ["pearl continental", "pc bhurban", "pearl continental bhurban"]
     pearl_mentions = sum(documents_text.lower().count(indicator) for indicator in pearl_continental_indicators)
     
+    # Exception: For date/booking queries, allow documents even if they don't explicitly mention Swiss Cottages
+    # (since they're from the knowledge base and user is providing dates, they're implicitly about Swiss Cottages)
+    is_date_query = any(word in query_lower for word in [
+        "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february",
+        "from", "to", "stay", "staying", "booking", "book", "dates", "check-in", "check-out"
+    ]) and any(word in query_lower for word in ["march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february", "stay", "staying", "nights"])
+    
+    # CRITICAL: Check for safety/facilities queries FIRST before rejecting documents
+    # These queries should be allowed even without explicit Swiss Cottages mentions
+    if not has_swiss_cottages_content and len(documents) > 0:
+        # If this is a safety query, allow documents even if they don't have explicit safety keywords
+        # (since user is asking about safety, any documents retrieved are likely relevant)
+        if is_safety_query:
+            if has_safety_content:
+                logger.info(f"Allowing safety documents with safety keywords for safety query")
+            else:
+                # Even without explicit safety keywords, if user asks about safety and we have documents, allow them
+                # The LLM will handle the response appropriately
+                logger.info(f"Allowing documents for safety query even without explicit safety keywords (user asked about safety)")
+            # Return True early - safety documents are valid even without explicit Swiss Cottages mentions
+            return True, ""
+        # If this is a facilities query and documents contain facilities keywords, allow them
+        elif is_facilities_query and has_facilities_content:
+            logger.info(f"Allowing facilities documents without explicit Swiss Cottages indicators for facilities query")
+            # Return True early - facilities documents are valid even without explicit Swiss Cottages mentions
+            return True, ""
+        # If this is a date/booking query, allow documents (user is providing dates for booking/pricing)
+        elif is_date_query:
+            logger.info(f"Allowing documents for date/booking query (user provided dates: {query_lower[:100]})")
+            # Return True early - date/booking documents are valid
+            return True, ""
+    
     # ONLY reject if:
     # 1. Documents mention Pearl Continental AND
     # 2. Documents do NOT have Swiss Cottages content (no Swiss Cottages indicators at all)
@@ -1650,26 +1892,10 @@ def check_document_relevance(query: str, documents: list) -> tuple[bool, str]:
             logger.warning(f"Rejecting documents - Pearl Continental mentioned but no Swiss Cottages content (Pearl mentions: {pearl_mentions})")
             return False, "The retrieved documents are about Pearl Continental Bhurban, but I only have information about Swiss Cottages Bhurban. Please ask about Swiss Cottages Bhurban facilities and services."
     
-    # Exception: For date/booking queries, allow documents even if they don't explicitly mention Swiss Cottages
-    # (since they're from the knowledge base and user is providing dates, they're implicitly about Swiss Cottages)
-    is_date_query = any(word in query_lower for word in [
-        "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february",
-        "from", "to", "stay", "staying", "booking", "book", "dates", "check-in", "check-out"
-    ]) and any(word in query_lower for word in ["march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february", "stay", "staying", "nights"])
-    
     if not has_swiss_cottages_content and len(documents) > 0:
-        # If this is a safety query and documents contain safety keywords, allow them
-        if is_safety_query and has_safety_content:
-            logger.info(f"Allowing safety documents without explicit Swiss Cottages indicators for safety query")
-        # If this is a facilities query and documents contain facilities keywords, allow them
-        elif is_facilities_query and has_facilities_content:
-            logger.info(f"Allowing facilities documents without explicit Swiss Cottages indicators for facilities query")
-        # If this is a date/booking query, allow documents (user is providing dates for booking/pricing)
-        elif is_date_query:
-            logger.info(f"Allowing documents for date/booking query (user provided dates: {query_lower[:100]})")
-        else:
-            # Documents exist but don't mention Swiss Cottages - this is a mismatch
-            return False, "The retrieved documents don't contain information about Swiss Cottages Bhurban. I only have information about Swiss Cottages Bhurban in Pakistan and cannot answer questions about other topics."
+        # Documents exist but don't mention Swiss Cottages - this is a mismatch
+        # (Safety/facilities/date queries already handled above)
+        return False, "The retrieved documents don't contain information about Swiss Cottages Bhurban. I only have information about Swiss Cottages Bhurban in Pakistan and cannot answer questions about other topics."
     
     location_keywords = {
         "india": ["pakistan", "bhurban", "murree", "azad kashmir", "pakistani"],
@@ -2678,7 +2904,7 @@ async def chat(
             
             # Build metadata filter for intent-based retrieval
             retrieval_filter = get_retrieval_filter(intent, entities)
-            logger.debug(f"Retrieval filter: {retrieval_filter}")
+            logger.info(f"Intent: {intent.value}, Retrieval filter: {retrieval_filter}, Entities: {entities}")
             
             # Determine effective k (exactly like Streamlit)
             # Streamlit shows 3 sources by default, so use k=3 to match
@@ -2754,11 +2980,48 @@ async def chat(
                     
                     # Safe to call len() now
                     if isinstance(retrieved_contents, list):
-                        logger.info(f"Retrieved {len(retrieved_contents)} documents with search query")
+                        logger.info(f"Retrieved {len(retrieved_contents)} documents with search query (intent={intent.value}, filter={retrieval_filter})")
+                        # Log document metadata for debugging
+                        if retrieved_contents:
+                            doc_intents = [doc.metadata.get("intent", "unknown") for doc in retrieved_contents[:3]]
+                            logger.debug(f"First 3 documents have intents: {doc_intents}")
                 else:
                     logger.error(f"Unexpected result type from similarity_search_with_threshold: {type(result)}")
                     retrieved_contents = []
                     sources = []
+                
+                # CRITICAL: Fallback logic - if intent filter returns too few documents, retry without filter
+                # This prevents empty retrieval when intent classification is uncertain or documents
+                # are classified with different intent metadata than expected
+                if is_intent_filtering_enabled() and retrieval_filter and len(retrieved_contents) < 2:
+                    logger.warning(
+                        f"Intent filter returned only {len(retrieved_contents)} documents for intent '{intent.value}'. "
+                        f"Retrying without filter to ensure we have relevant documents."
+                    )
+                    try:
+                        # Retry without intent filter (but keep cottage_id filter if available)
+                        fallback_filter = None
+                        if entities.get("cottage_id"):
+                            fallback_filter = {"cottage_id": str(entities["cottage_id"])}
+                        
+                        fallback_result = vector_store.similarity_search_with_threshold(
+                            query=search_query,
+                            k=min(effective_k * 3, 15),
+                            threshold=0.0,
+                            filter=fallback_filter
+                        )
+                        
+                        if fallback_result and isinstance(fallback_result, tuple) and len(fallback_result) == 2:
+                            fallback_contents, fallback_sources = fallback_result
+                            if isinstance(fallback_contents, list) and len(fallback_contents) > len(retrieved_contents):
+                                logger.info(
+                                    f"Fallback retrieval (without intent filter) returned {len(fallback_contents)} documents. "
+                                    f"Using fallback results."
+                                )
+                                retrieved_contents = fallback_contents
+                                sources = fallback_sources
+                    except Exception as e:
+                        logger.warning(f"Error in fallback retrieval without filter: {e}")
                 
                 # Deduplicate by source to ensure diversity
                 seen_sources = set()
@@ -3108,6 +3371,27 @@ CONTACT INFORMATION:
                     )
                     logger.info(f"Enhanced context with capacity analysis: suitable={capacity_result.get('suitable')}, has_all_info={capacity_result.get('has_all_info')}")
             
+            # CRITICAL: Enforce "No Context = No Answer" rule
+            # After all retrieval attempts and handler processing, if we still have no content,
+            # DO NOT generate answer from training data - return helpful error message instead
+            if not retrieved_contents:
+                logger.warning(f"No documents retrieved after all attempts for query: '{request.question}'")
+                answer = (
+                    "I don't have information about that in my knowledge base.\n\n"
+                    "💡 **Please try:**\n"
+                    "- Rephrasing your question (e.g., 'Where is Swiss Cottages Bhurban located?')\n"
+                    "- Using different keywords\n"
+                    "- Being more specific about Swiss Cottages Bhurban\n\n"
+                    "**Note:** I only answer questions based on the provided FAQ documents about Swiss Cottages Bhurban. "
+                    "I cannot answer questions from general knowledge or about other locations.\n"
+                )
+                return ChatResponse(
+                    answer=answer,
+                    sources=[],
+                    intent=intent_type,
+                    session_id=request.session_id,
+                )
+            
             # Generate answer
             if retrieved_contents:
                 # Check relevance with enhanced topic matching
@@ -3373,6 +3657,15 @@ CONTACT INFORMATION:
                 # Clean answer text to remove LLM reasoning/process text
                 answer_text = clean_answer_text(answer_text)
                 
+                # Fix incorrect naming (Swiss Chalet, etc.)
+                answer_text = fix_incorrect_naming(answer_text)
+                
+                # Fix question rephrasing
+                answer_text = fix_question_rephrasing(answer_text, request.question)
+                
+                # Fix incorrect location mentions (Azad Kashmir, Patriata)
+                answer_text = fix_incorrect_location_mentions(answer_text)
+                
                 # Check for incomplete responses (cut off mid-sentence)
                 if answer_text and not answer_text.strip().endswith(('.', '!', '?', ':', ';')):
                     # Check if it ends mid-word or mid-sentence
@@ -3572,6 +3865,9 @@ CONTACT INFORMATION:
                                     )
                                 
                                 answer_text = clean_answer_text(answer_text)
+                                
+                                # Fix incorrect location mentions (Azad Kashmir, Patriata)
+                                answer_text = fix_incorrect_location_mentions(answer_text)
                                 
                                 # Check relevance again with enhanced topic matching
                                 if not is_answer_relevant(answer_text, request.question):
@@ -3832,6 +4128,48 @@ CONTACT INFORMATION:
                 # Clean answer text (removes reasoning, templates, etc.)
                 answer_text = clean_answer_text(answer_text)
                 
+                # CRITICAL: Validate URLs in answer - only allow URLs that appear in context
+                # Extract all URLs from context
+                context_text = "\n".join([doc.page_content for doc in retrieved_contents[:5]])
+                context_urls = set(re.findall(r'https?://[^\s\)]+', context_text, re.IGNORECASE))
+                
+                # Extract URLs from answer
+                answer_urls = re.findall(r'https?://[^\s\)]+', answer_text, re.IGNORECASE)
+                
+                # Remove URLs from answer that don't appear in context (likely from training data)
+                for url in answer_urls:
+                    url_lower = url.lower()
+                    # Check if this URL (or similar) appears in context
+                    url_in_context = any(
+                        url_lower in ctx_url.lower() or ctx_url.lower() in url_lower
+                        for ctx_url in context_urls
+                    )
+                    
+                    # Also check for known valid domains
+                    valid_domains = [
+                        'swisscottagesbhurban.com',
+                        'airbnb.com',
+                        'instagram.com',
+                        'facebook.com',
+                        'goo.gl/maps',
+                        'maps.google.com'
+                    ]
+                    is_valid_domain = any(domain in url_lower for domain in valid_domains)
+                    
+                    if not url_in_context and not is_valid_domain:
+                        # Remove this URL from answer
+                        answer_text = answer_text.replace(url, "")
+                        logger.warning(f"Removed URL from answer that's not in context: {url[:50]}")
+                
+                # Fix incorrect naming (Swiss Chalet, etc.)
+                answer_text = fix_incorrect_naming(answer_text)
+                
+                # Fix question rephrasing
+                answer_text = fix_question_rephrasing(answer_text, request.question)
+                
+                # Fix incorrect location mentions (Azad Kashmir, Patriata)
+                answer_text = fix_incorrect_location_mentions(answer_text)
+                
                 # Final length enforcement - truncate if still exceeds limit
                 final_sentence_count = count_sentences(answer_text)
                 if final_sentence_count > max_sentences:
@@ -3947,16 +4285,19 @@ CONTACT INFORMATION:
                         retrieved_contents if retrieved_contents else [], capacity_result
                     )
                 
-                # Only show error if we still have no content after checking handlers
+                # CRITICAL: Enforce "No Context = No Answer" rule
+                # After all retrieval attempts and handler processing, if we still have no content,
+                # DO NOT generate answer from training data - return helpful error message instead
                 if not retrieved_contents:
+                    logger.warning(f"No documents retrieved after all attempts for query: '{request.question}'")
                     answer = (
-                        "I couldn't find specific information about that in our knowledge base.\n\n"
+                        "I don't have information about that in my knowledge base.\n\n"
                         "💡 **Please try:**\n"
-                        "- Rephrasing your question (e.g., 'What is Swiss Cottages Bhurban?')\n"
+                        "- Rephrasing your question (e.g., 'Where is Swiss Cottages Bhurban located?')\n"
                         "- Using different keywords\n"
                         "- Being more specific about Swiss Cottages Bhurban\n\n"
-                        "**Note:** I only answer questions based on the provided FAQ documents. "
-                        "I cannot answer questions from general knowledge.\n"
+                        "**Note:** I only answer questions based on the provided FAQ documents about Swiss Cottages Bhurban. "
+                        "I cannot answer questions from general knowledge or about other locations.\n"
                     )
                     return ChatResponse(
                         answer=answer,
@@ -4484,7 +4825,7 @@ async def chat_stream(
                 
                 # Build metadata filter for intent-based retrieval
                 retrieval_filter = get_retrieval_filter(intent, entities)
-                logger.debug(f"Retrieval filter: {retrieval_filter}")
+                logger.info(f"Intent: {intent.value}, Retrieval filter: {retrieval_filter}, Entities: {entities}")
             else:
                 # Fallback to old behavior (no intent-based filtering)
                 entities = {}
@@ -4566,10 +4907,49 @@ async def chat_stream(
                         logger.error(f"Invalid result types: retrieved_contents={type(retrieved_contents)}, sources={type(sources)}")
                         retrieved_contents = []
                         sources = []
+                    else:
+                        logger.info(f"Retrieved {len(retrieved_contents)} documents with search query (intent={intent.value}, filter={retrieval_filter})")
+                        # Log document metadata for debugging
+                        if retrieved_contents:
+                            doc_intents = [doc.metadata.get("intent", "unknown") for doc in retrieved_contents[:3]]
+                            logger.debug(f"First 3 documents have intents: {doc_intents}")
                 else:
                     logger.error(f"Unexpected result type from similarity_search_with_threshold: {type(result)}")
                     retrieved_contents = []
                     sources = []
+                
+                # CRITICAL: Fallback logic - if intent filter returns too few documents, retry without filter
+                # This prevents empty retrieval when intent classification is uncertain or documents
+                # are classified with different intent metadata than expected
+                if is_intent_filtering_enabled() and retrieval_filter and len(retrieved_contents) < 2:
+                    logger.warning(
+                        f"Intent filter returned only {len(retrieved_contents)} documents for intent '{intent.value}'. "
+                        f"Retrying without filter to ensure we have relevant documents."
+                    )
+                    try:
+                        # Retry without intent filter (but keep cottage_id filter if available)
+                        fallback_filter = None
+                        if entities.get("cottage_id"):
+                            fallback_filter = {"cottage_id": str(entities["cottage_id"])}
+                        
+                        fallback_result = vector_store.similarity_search_with_threshold(
+                            query=search_query,
+                            k=min(effective_k * 3, 20),
+                            threshold=0.0,
+                            filter=fallback_filter
+                        )
+                        
+                        if fallback_result and isinstance(fallback_result, tuple) and len(fallback_result) == 2:
+                            fallback_contents, fallback_sources = fallback_result
+                            if isinstance(fallback_contents, list) and len(fallback_contents) > len(retrieved_contents):
+                                logger.info(
+                                    f"Fallback retrieval (without intent filter) returned {len(fallback_contents)} documents. "
+                                    f"Using fallback results."
+                                )
+                                retrieved_contents = fallback_contents
+                                sources = fallback_sources
+                    except Exception as e:
+                        logger.warning(f"Error in fallback retrieval without filter: {e}")
                 
                 # Deduplicate
                 seen_sources = set()
@@ -4799,17 +5179,23 @@ To book {booking_cottages}:
                         retrieved_contents if retrieved_contents else [], capacity_result
                     )
             
+            # CRITICAL: Enforce "No Context = No Answer" rule
+            # After all retrieval attempts and handler processing, if we still have no content,
+            # DO NOT generate answer from training data - return helpful error message instead
             if not retrieved_contents:
+                logger.warning(f"No documents retrieved after all attempts for query: '{request.question}'")
                 # Hide searching message before showing fallback
                 yield f"data: {json.dumps({'type': 'hide_searching'})}\n\n"
                 await asyncio.sleep(0.05)
                 
                 answer = (
-                    "I couldn't find specific information about that in our knowledge base.\n\n"
+                    "I don't have information about that in my knowledge base.\n\n"
                     "💡 **Please try:**\n"
-                    "- Rephrasing your question\n"
+                    "- Rephrasing your question (e.g., 'Where is Swiss Cottages Bhurban located?')\n"
                     "- Using different keywords\n"
-                    "- Being more specific about Swiss Cottages Bhurban\n"
+                    "- Being more specific about Swiss Cottages Bhurban\n\n"
+                    "**Note:** I only answer questions based on the provided FAQ documents about Swiss Cottages Bhurban. "
+                    "I cannot answer questions from general knowledge or about other locations.\n"
                 )
                 yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
@@ -4952,9 +5338,20 @@ To book {booking_cottages}:
                         [], capacity_result
                     )
             
+            # CRITICAL: Enforce "No Context = No Answer" rule
+            # After all retrieval attempts and handler processing, if we still have no content,
+            # DO NOT generate answer from training data - return helpful error message instead
             if not retrieved_contents:
-                logger.error("retrieved_contents is empty - cannot generate answer")
-                answer = "I couldn't find specific information about that in our knowledge base.\n\n💡 **Please try:**\n- Rephrasing your question\n- Using different keywords\n- Being more specific about Swiss Cottages Bhurban"
+                logger.warning(f"No documents retrieved after all attempts for query: '{request.question}'")
+                answer = (
+                    "I don't have information about that in my knowledge base.\n\n"
+                    "💡 **Please try:**\n"
+                    "- Rephrasing your question (e.g., 'Where is Swiss Cottages Bhurban located?')\n"
+                    "- Using different keywords\n"
+                    "- Being more specific about Swiss Cottages Bhurban\n\n"
+                    "**Note:** I only answer questions based on the provided FAQ documents about Swiss Cottages Bhurban. "
+                    "I cannot answer questions from general knowledge or about other locations.\n"
+                )
                 error_sources = []
                 if sources:
                     for src in sources[:effective_k]:
@@ -5269,6 +5666,49 @@ To book {booking_cottages}:
                     full_answer = cleaned
                 else:
                     logger.warning(f"clean_answer_text returned empty, keeping original full_answer")
+                
+                # CRITICAL: Validate URLs in answer - only allow URLs that appear in context
+                # Extract all URLs from context
+                if retrieved_contents:
+                    context_text = "\n".join([doc.page_content for doc in retrieved_contents[:5] if hasattr(doc, 'page_content')])
+                    context_urls = set(re.findall(r'https?://[^\s\)]+', context_text, re.IGNORECASE))
+                    
+                    # Extract URLs from answer
+                    answer_urls = re.findall(r'https?://[^\s\)]+', full_answer, re.IGNORECASE)
+                    
+                    # Remove URLs from answer that don't appear in context (likely from training data)
+                    for url in answer_urls:
+                        url_lower = url.lower()
+                        # Check if this URL (or similar) appears in context
+                        url_in_context = any(
+                            url_lower in ctx_url.lower() or ctx_url.lower() in url_lower
+                            for ctx_url in context_urls
+                        )
+                        
+                        # Also check for known valid domains
+                        valid_domains = [
+                            'swisscottagesbhurban.com',
+                            'airbnb.com',
+                            'instagram.com',
+                            'facebook.com',
+                            'goo.gl/maps',
+                            'maps.google.com'
+                        ]
+                        is_valid_domain = any(domain in url_lower for domain in valid_domains)
+                        
+                        if not url_in_context and not is_valid_domain:
+                            # Remove this URL from answer
+                            full_answer = full_answer.replace(url, "")
+                            logger.warning(f"Removed URL from answer that's not in context: {url[:50]}")
+                
+                # Fix incorrect naming (Swiss Chalet, etc.)
+                full_answer = fix_incorrect_naming(full_answer)
+                
+                # Fix question rephrasing
+                full_answer = fix_question_rephrasing(full_answer, request.question)
+                
+                # Fix incorrect location mentions (Azad Kashmir, Patriata)
+                full_answer = fix_incorrect_location_mentions(full_answer)
                 
                 # Final check for incomplete responses after cleaning
                 if full_answer and not full_answer.strip().endswith(('.', '!', '?', ':', ';')):
