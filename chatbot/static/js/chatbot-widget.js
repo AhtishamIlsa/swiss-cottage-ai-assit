@@ -2422,8 +2422,8 @@
                         if (!this.isProcessingAudio) {
                             this.startSilenceTimer();
                         }
-                    } else if (voiceCheck.rms > 0.015) {
-                        // There's some sound but it's not human speech (increased threshold from 0.01)
+                    } else if (voiceCheck.rms > 0.012) {
+                        // There's some sound but it's not human speech (lowered threshold for better detection)
                         this.consecutiveNoiseCount++;
 
                         // Only log noise occasionally to reduce console spam:
@@ -2561,10 +2561,10 @@
                 const currentTime = Date.now();
                 const timeSinceLastSpeech = this.lastHumanSpeechTime ? (currentTime - this.lastHumanSpeechTime) : Infinity;
 
-                // Silence means no human speech detected in the last 1 second
-                const isSilence = !this.lastHumanSpeechTime || timeSinceLastSpeech >= 1000;
+                // Silence means no human speech detected in the last 2 seconds
+                const isSilence = !this.lastHumanSpeechTime || timeSinceLastSpeech >= 2000;
 
-                console.log('⏰ Silence timer fired after 1 second. Time since last human speech:', timeSinceLastSpeech, 'ms');
+                console.log('⏰ Silence timer fired after 2 seconds. Time since last human speech:', timeSinceLastSpeech, 'ms');
 
                 // Only process if:
                 // 1. We have audio buffers
@@ -2572,7 +2572,7 @@
                 // 3. We have enough audio data (at least 1.0 seconds)
                 // 4. We're not already processing
                 // 5. TTS is not playing (don't process during agent speech)
-                // 6. No human speech detected in the last 1 second (true silence)
+                // 6. No human speech detected in the last 2 seconds (true silence)
                 if (this.audioBuffer.length > 0 && !this.isProcessingAudio && this.voiceDetected && !this.isPlayingTTS && isSilence) {
                     const totalSamples = this.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
                     const minSamples = this.audioContext ? (this.audioContext.sampleRate * 1.0) : 16000; // At least 1.0 seconds
@@ -2588,7 +2588,7 @@
                     });
 
                     if (totalSamples >= minSamples && this.voiceDetected) {
-                        console.log('🔇 1 second of silence (no human speech) detected, processing audio...', this.audioBuffer.length, 'buffers, total samples:', totalSamples);
+                        console.log('🔇 2 seconds of silence (no human speech) detected, processing audio...', this.audioBuffer.length, 'buffers, total samples:', totalSamples);
                         this.handleSilenceDetected();
                     } else {
                         console.log('⚠️ Silence detected but:', {
@@ -2623,8 +2623,11 @@
                         voiceDetected: this.voiceDetected,
                         isSilence: isSilence
                     });
-                    // Reset if no voice was detected
-                    if (!this.voiceDetected) {
+                    // Reset if no voice was detected AND we've been waiting too long
+                    // But keep some buffer in case user is just starting to speak
+                    if (!this.voiceDetected && this.audioBuffer.length > 20) {
+                        // Only clear if we have a lot of buffers (more than 1 second of audio)
+                        // This prevents clearing audio when user is just starting to speak
                         this.audioBuffer = [];
                         this.lastHumanSpeechTime = null;
                     }
@@ -2635,7 +2638,7 @@
                     }
                 }
                 this.silenceTimer = null;
-            }, 1000); // 1 second silence detection - no human speech for 1 second
+            }, 2000); // 2 seconds silence detection - no human speech for 2 seconds
         }
 
         handleSilenceDetected() {
@@ -2861,8 +2864,8 @@
             // Calibrate background noise during first 2 seconds
             this.calibrateBackgroundNoise(audioData);
 
-            // Use adaptive threshold (3.5x background noise, minimum 0.015 - increased for better filtering)
-            const adaptiveThreshold = Math.max(0.015, this.backgroundNoiseLevel * 3.5);
+            // Use adaptive threshold (3x background noise, minimum 0.012 - balanced for better detection)
+            const adaptiveThreshold = Math.max(0.012, this.backgroundNoiseLevel * 3);
 
             // Minimum energy threshold - filter out very quiet sounds
             if (rms < adaptiveThreshold) {
@@ -3019,22 +3022,22 @@
             // 7. Temporal Continuity - require sustained voice detection (more lenient)
             const currentTime = Date.now();
 
-            // Add to voice history if confidence is reasonable (increased threshold for better filtering)
-            if (confidence >= 0.35) {
+            // Add to voice history if confidence is reasonable (lowered for better detection)
+            if (confidence >= 0.30) {
                 this.voiceHistory.push({
                     time: currentTime,
                     confidence: confidence
                 });
             }
 
-            // Remove old history (older than 1.5 seconds - longer window for better detection)
+            // Remove old history (older than 1.2 seconds - balanced window)
             this.voiceHistory = this.voiceHistory.filter(
-                entry => currentTime - entry.time < 1500
+                entry => currentTime - entry.time < 1200
             );
 
-            // Require at least 4 detections in last 1.5 seconds for sustained speech
-            // OR if confidence is very high (>0.7), accept immediately
-            if (confidence < 0.7 && this.voiceHistory.length < 4) {
+            // Require at least 2 detections in last 1.2 seconds for sustained speech
+            // OR if confidence is very high (>0.60), accept immediately
+            if (confidence < 0.60 && this.voiceHistory.length < 2) {
                 result.noiseType = 'too_brief';
                 result.confidence = confidence;
                 return result; // Too brief to be speech
@@ -3048,22 +3051,31 @@
                 ) / this.voiceHistory.length;
             }
 
-            // Use dynamic threshold based on background noise (stricter - increased from 0.30 to 0.45)
-            const dynamicThreshold = Math.max(0.45, 0.45 + (this.backgroundNoiseLevel * 2));
+            // Use dynamic threshold based on background noise (more lenient for better detection)
+            const dynamicThreshold = Math.max(0.30, 0.30 + (this.backgroundNoiseLevel * 1.2));
 
             // Final decision: combine current confidence with temporal average
-            // Require at least 4 detections for temporal averaging (was 2)
-            const finalConfidence = this.voiceHistory.length >= 4
-                ? (confidence * 0.6) + (avgConfidence * 0.4)
+            // Require at least 2 detections for temporal averaging (more responsive)
+            const finalConfidence = this.voiceHistory.length >= 2
+                ? (confidence * 0.7) + (avgConfidence * 0.3)
                 : confidence;
 
-            // Stricter final threshold - require higher confidence
-            if (finalConfidence >= dynamicThreshold && rms >= 0.02) {
+            // More lenient threshold - detect human speech more easily
+            // Lower RMS requirement for quieter speech
+            if (finalConfidence >= dynamicThreshold && rms >= 0.012) {
                 result.isHumanSpeech = true;
                 result.confidence = Math.min(finalConfidence, 1.0);
+                // Debug logging for successful detection
+                if (this.voiceHistory.length % 10 === 0) { // Log every 10th detection to avoid spam
+                    console.log('✅ Human speech detected - Confidence:', finalConfidence.toFixed(2), 'RMS:', rms.toFixed(4), 'Threshold:', dynamicThreshold.toFixed(2));
+                }
             } else {
                 result.noiseType = 'low_confidence';
                 result.confidence = finalConfidence;
+                // Debug logging for failed detection (less frequent)
+                if (this.voiceHistory.length % 50 === 0) { // Log every 50th to see why it's failing
+                    console.log('❌ Not detected as speech - Confidence:', finalConfidence.toFixed(2), 'RMS:', rms.toFixed(4), 'Threshold:', dynamicThreshold.toFixed(2), 'Required RMS:', 0.012);
+                }
             }
 
             return result;
@@ -3164,9 +3176,9 @@
                 const sampleRate = this.audioContext.sampleRate;
                 const duration = totalLength / sampleRate;
 
-                // Need at least 0.8 seconds of audio to be valid (increased from 0.3s for better filtering)
-                if (duration < 0.8) {
-                    console.warn('⚠️ Audio too short:', duration.toFixed(2), 's (need at least 0.8s)');
+                // Need at least 0.5 seconds of audio to be valid (reduced from 0.8s for better responsiveness)
+                if (duration < 0.5) {
+                    console.warn('⚠️ Audio too short:', duration.toFixed(2), 's (need at least 0.5s)');
                     this.isProcessingAudio = false;
                     this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
                     this.voiceDetected = false;
@@ -3197,11 +3209,13 @@
                     }
                 }
 
-                // At least 20% of chunks should contain human speech (increased from 10% for better filtering)
+                // At least 5% of chunks should contain human speech if voice was detected during recording
+                // Otherwise require 10% (lowered from 20% - natural speech has pauses)
                 // This accounts for pauses in natural speech and background noise
                 const speechRatio = validSpeechChunks / totalChunks;
-                if (speechRatio < 0.20) {
-                    console.warn('⚠️ Audio contains mostly noise, not human speech. Speech ratio:', speechRatio.toFixed(2), '(need at least 20%)');
+                const requiredRatio = this.voiceDetected ? 0.05 : 0.10; // Lower threshold if voice was detected
+                if (speechRatio < requiredRatio) {
+                    console.warn('⚠️ Audio contains mostly noise, not human speech. Speech ratio:', speechRatio.toFixed(2), `(need at least ${(requiredRatio * 100).toFixed(0)}%)`);
                     this.isProcessingAudio = false;
                     this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
                     this.voiceDetected = false;
@@ -3217,7 +3231,7 @@
                     return;
                 }
 
-                console.log('✅ Speech validation passed - Speech ratio:', speechRatio.toFixed(2), '(20%+ required)');
+                console.log('✅ Speech validation passed - Speech ratio:', speechRatio.toFixed(2), `(${(requiredRatio * 100).toFixed(0)}%+ required)`);
 
                 console.log('✅ Audio validation passed - Speech ratio:', speechRatio.toFixed(2), 'Duration:', duration.toFixed(2), 's');
 
