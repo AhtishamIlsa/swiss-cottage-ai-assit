@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # A string template for the system message.
 # This template is used to define the behavior and characteristics of the assistant.
 SYSTEM_TEMPLATE = """You are a helpful, respectful and honest assistant.
@@ -802,7 +803,6 @@ CRITICAL RULES:
 - **🚨 CRITICAL RULE: If context contains ANY mention of the topic (kitchen, facilities, amenities, equipment), you MUST provide that information - never say "I couldn't find"**
 
 Question: {question}
-Answer:"""
 Answer:"""
 
 
