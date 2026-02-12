@@ -45,6 +45,10 @@ nginx/uwsgi_temp/
 nginx/scgi_temp/
 *.tmp
 
+# Systemd service files (local configuration)
+nginx/systemd/swiss-cottage-api.service
+nginx/systemd/swiss-cottage-streamlit.service
+
 # FAQ documentation files (generated)
 docs/faq/
 
