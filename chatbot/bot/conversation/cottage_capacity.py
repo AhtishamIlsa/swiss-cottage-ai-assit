@@ -127,7 +127,7 @@ class CottageCapacityMapper:
         max_capacity = capacity_info["max_capacity"]
         
         if group_size <= base_capacity:
-            return True, f"{group_size} guests ≤ {base_capacity} base capacity (comfortable at base price)"
+            return True, f"{group_size} guests ≤ {base_capacity} base capacity (comfortable at standard capacity)"
         elif group_size <= max_capacity:
             return True, f"{group_size} guests ≤ {max_capacity} max capacity (possible with prior confirmation and adjusted pricing)"
         else:
@@ -163,7 +163,7 @@ class CottageCapacityMapper:
         if base == max_cap:
             return f"Cottage {cottage_number}: {bedrooms}-bedroom cottage, accommodates up to {max_cap} guests"
         else:
-            return f"Cottage {cottage_number}: {bedrooms}-bedroom cottage, accommodates up to {base} guests at base price, up to {max_cap} guests with prior confirmation"
+            return f"Cottage {cottage_number}: {bedrooms}-bedroom cottage, accommodates up to {base} guests at standard capacity, up to {max_cap} guests with prior confirmation"
 
 
 # Global instance for easy access

@@ -88,7 +88,7 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
         super().__init__(llm)
 
     def generate_response(
-        self, retrieved_contents: list[Document], question: str, max_new_tokens: int = 512, use_simple_prompt: bool = False
+        self, retrieved_contents: list[Document], question: str, max_new_tokens: int = 512, use_simple_prompt: bool = False, intent: str = None
     ) -> str | Any:
         """
         Generate a response using create and refine strategy.
@@ -122,15 +122,51 @@ class CreateAndRefineStrategy(BaseSynthesisStrategy):
             
             logger.debug(f"--- Context: '{context[:200]}...' ... ---")
             if idx == 1:  # First chunk uses contextual prompt
-                fmt_prompt = self.llm.generate_ctx_prompt(question=question, context=context, use_simple_prompt=use_simple_prompt)
+                # Use intent-specific prompt if intent is provided and intent filtering is enabled
+                if intent:
+                    import os
+                    use_intent_filtering = os.getenv("USE_INTENT_FILTERING", "true").lower() == "true"
+                    if use_intent_filtering:
+                        from bot.client.prompt import generate_intent_ctx_prompt
+                        fmt_prompt = generate_intent_ctx_prompt(intent=intent, question=question, context=context)
+                    else:
+                        fmt_prompt = self.llm.generate_ctx_prompt(question=question, context=context, use_simple_prompt=use_simple_prompt)
+                else:
+                    fmt_prompt = self.llm.generate_ctx_prompt(question=question, context=context, use_simple_prompt=use_simple_prompt)
             else:
-                # For refinement, ensure we're adding new information
-                fmt_prompt = self.llm.generate_refined_ctx_prompt(
-                    question=question,
-                    context=context,
-                    existing_answer=str(cur_response) if cur_response else "",
-                    use_simple_prompt=use_simple_prompt,
-                )
+                # For refinement, use intent-specific constraints if available
+                if intent:
+                    import os
+                    use_intent_filtering = os.getenv("USE_INTENT_FILTERING", "true").lower() == "true"
+                    if use_intent_filtering:
+                        # Use intent-specific prompt for refinement
+                        from bot.client.prompt import generate_intent_ctx_prompt
+                        # For refinement, we add the existing answer context
+                        existing_answer = str(cur_response) if cur_response else ""
+                        # Generate base intent prompt
+                        base_prompt = generate_intent_ctx_prompt(intent=intent, question=question, context=context)
+                        # Modify for refinement
+                        fmt_prompt = base_prompt.replace(
+                            "Context information is below.",
+                            f"Previous answer: {existing_answer}\n\nAdditional context information is below."
+                        ).replace(
+                            "Answer:",
+                            "Refined Answer:"
+                        )
+                    else:
+                        fmt_prompt = self.llm.generate_refined_ctx_prompt(
+                            question=question,
+                            context=context,
+                            existing_answer=str(cur_response) if cur_response else "",
+                            use_simple_prompt=use_simple_prompt,
+                        )
+                else:
+                    fmt_prompt = self.llm.generate_refined_ctx_prompt(
+                        question=question,
+                        context=context,
+                        existing_answer=str(cur_response) if cur_response else "",
+                        use_simple_prompt=use_simple_prompt,
+                    )
 
             if idx == num_of_contents:
                 cur_response = self.llm.start_answer_iterator_streamer(fmt_prompt, max_new_tokens=max_new_tokens)

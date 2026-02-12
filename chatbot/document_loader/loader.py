@@ -1,4 +1,5 @@
 import concurrent.futures
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,14 @@ from tqdm import tqdm
 from unstructured.partition.auto import partition
 
 logger = get_logger(__name__)
+
+# Try to import yaml for frontmatter parsing
+try:
+    import yaml
+    YAML_SUPPORT = True
+except ImportError:
+    YAML_SUPPORT = False
+    logger.warning("yaml not available - frontmatter parsing disabled. Install with: pip install pyyaml")
 
 
 class DirectoryLoader:
@@ -85,7 +94,37 @@ class DirectoryLoader:
                 # For markdown files, read directly to avoid unstructured issues
                 if doc_path.suffix.lower() == '.md':
                     text = doc_path.read_text(encoding='utf-8')
-                    docs.extend([Document(page_content=text, metadata={"source": str(doc_path)})])
+                    
+                    # Parse YAML frontmatter if present
+                    metadata = {"source": str(doc_path)}
+                    frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n(.*)$'
+                    match = re.match(frontmatter_pattern, text, re.DOTALL)
+                    
+                    if match and YAML_SUPPORT:
+                        frontmatter_text = match.group(1)
+                        content_text = match.group(2)
+                        try:
+                            frontmatter = yaml.safe_load(frontmatter_text) or {}
+                            # Extract metadata from frontmatter - only include non-None values
+                            if frontmatter.get("intent"):
+                                metadata["intent"] = frontmatter.get("intent")
+                            if frontmatter.get("cottage_id") is not None:
+                                metadata["cottage_id"] = str(frontmatter.get("cottage_id"))  # Convert to string for ChromaDB
+                            if frontmatter.get("category"):
+                                metadata["category"] = frontmatter.get("category")
+                            if frontmatter.get("faq_id"):
+                                metadata["faq_id"] = frontmatter.get("faq_id")
+                            if frontmatter.get("type"):
+                                metadata["type"] = frontmatter.get("type", "document")
+                            # Use content without frontmatter
+                            text = content_text
+                        except Exception as e:
+                            logger.warning(f"Failed to parse frontmatter for {doc_path}: {e}")
+                    
+                    # Clean metadata - remove None values before creating Document
+                    metadata = {k: v for k, v in metadata.items() if v is not None}
+                    
+                    docs.extend([Document(page_content=text, metadata=metadata)])
                 else:
                     # For other file types, use unstructured
                     elements = partition(filename=str(doc_path), **self.partition_kwargs)

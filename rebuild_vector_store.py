@@ -2,6 +2,7 @@
 """Simple script to rebuild vector store from markdown files without PDF dependencies."""
 
 import sys
+import re
 from pathlib import Path
 
 # Add chatbot directory to path
@@ -15,6 +16,22 @@ from entities.document import Document
 from helpers.log import get_logger
 
 logger = get_logger(__name__)
+
+# Try to import yaml for frontmatter parsing
+try:
+    import yaml
+    YAML_SUPPORT = True
+except ImportError:
+    YAML_SUPPORT = False
+    logger.warning("yaml not available - frontmatter parsing disabled. Install with: pip install pyyaml")
+
+
+def clean_metadata(metadata: dict) -> dict:
+    """
+    Remove None values from metadata dict.
+    ChromaDB doesn't accept None values - only str, int, float, or bool.
+    """
+    return {k: v for k, v in metadata.items() if v is not None}
 
 
 def load_markdown_files(docs_path: Path) -> list[Document]:
@@ -37,6 +54,35 @@ def load_markdown_files(docs_path: Path) -> list[Document]:
                 parts = md_file.stem.split("_faq_")
                 if len(parts) > 1:
                     metadata["faq_id"] = parts[-1]
+            
+            # Parse YAML frontmatter if present
+            frontmatter_pattern = r'^---\s*\n(.*?)\n---\s*\n(.*)$'
+            match = re.match(frontmatter_pattern, content, re.DOTALL)
+            
+            if match and YAML_SUPPORT:
+                frontmatter_text = match.group(1)
+                content_text = match.group(2)
+                try:
+                    frontmatter = yaml.safe_load(frontmatter_text) or {}
+                    # Extract metadata from frontmatter (overrides filename-based metadata)
+                    # Only include non-None values
+                    if frontmatter.get("intent"):
+                        metadata["intent"] = frontmatter.get("intent")
+                    if frontmatter.get("cottage_id") is not None:
+                        metadata["cottage_id"] = str(frontmatter.get("cottage_id"))  # Convert to string for ChromaDB
+                    if frontmatter.get("category"):
+                        metadata["category"] = frontmatter.get("category")
+                    if frontmatter.get("faq_id"):
+                        metadata["faq_id"] = frontmatter.get("faq_id")
+                    if frontmatter.get("type"):
+                        metadata["type"] = frontmatter.get("type")
+                    # Use content without frontmatter
+                    content = content_text
+                except Exception as e:
+                    logger.warning(f"Failed to parse frontmatter for {md_file}: {e}")
+            
+            # Clean metadata - remove None values before creating Document
+            metadata = clean_metadata(metadata)
             
             doc = Document(page_content=content, metadata=metadata)
             documents.append(doc)

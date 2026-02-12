@@ -28,7 +28,14 @@ from bot.conversation.intent_router import IntentType
 from bot.conversation.refinement_handler import get_refinement_handler
 from bot.conversation.capacity_handler import get_capacity_handler
 from bot.conversation.pricing_handler import get_pricing_handler
-from bot.conversation.query_optimizer import optimize_query_for_rag
+from bot.conversation.date_extractor import get_date_extractor
+from bot.conversation.query_optimizer import (
+    optimize_query_for_rag,
+    optimize_query_for_retrieval,
+    extract_entities_for_retrieval,
+    get_retrieval_filter,
+    is_complex_query,
+)
 from bot.conversation.sentiment_analyzer import get_sentiment_analyzer
 from bot.conversation.confidence_scorer import get_confidence_scorer
 from bot.conversation.recommendation_engine import get_recommendation_engine
@@ -58,6 +65,7 @@ from .dependencies import (
     get_ctx_synthesis_strategy,
     get_root_folder,
     is_query_optimization_enabled,
+    is_intent_filtering_enabled,
     clear_vector_store_cache,
 )
 
@@ -68,82 +76,108 @@ def generate_follow_up_actions(
     intent: IntentType,
     slots: Dict[str, Any],
     query: str,
+    context_tracker: Optional["ContextTracker"] = None,
+    chat_history: Optional[List[str]] = None,
+    llm_client: Optional[Any] = None,
     is_widget_query: bool = False
 ) -> Optional[Dict[str, Any]]:
     """
     Generate follow-up actions (quick actions and suggestions) based on intent and context.
+    Uses 3-tier recommendation system with LLM enhancement.
     
     Args:
         intent: Detected intent type
         slots: Current slot values
         query: User's query
+        context_tracker: Optional context tracker for per-session personalization
+        chat_history: Optional chat history for topic analysis
+        llm_client: Optional LLM client for generating dynamic recommendations
         is_widget_query: Whether this query was triggered from a widget card
         
     Returns:
         Dictionary with quick_actions and suggestions, or None
     """
+    from bot.conversation.recommendation_engine import get_recommendation_engine
+    from bot.conversation.context_tracker import ContextTracker as CT
+    
     quick_actions = []
     suggestions = []
     
     query_lower = query.lower()
     
-    # Generate actions based on intent
+    # Get recommendation engine
+    recommendation_engine = get_recommendation_engine()
+    
+    # Use default context tracker if not provided
+    if context_tracker is None:
+        # Create a minimal context tracker for default behavior
+        context_tracker = CT(session_id="default")
+    
+    # Get rule-based contextual suggestions (3-tier system)
+    rule_based_suggestions = recommendation_engine.generate_contextual_suggestions(
+        query=query,
+        intent=intent,
+        slots=slots,
+        context_tracker=context_tracker,
+        chat_history=chat_history
+    )
+    
+    # Get LLM-generated recommendations (1-2 dynamic recommendations)
+    llm_suggestions = []
+    if llm_client is not None:
+        try:
+            llm_suggestions = recommendation_engine.generate_llm_recommendations(
+                query=query,
+                intent=intent,
+                chat_history=chat_history or [],
+                context_tracker=context_tracker,
+                llm_client=llm_client
+            )
+        except Exception as e:
+            logger.warning(f"Failed to generate LLM recommendations: {e}")
+    
+    # Merge suggestions: LLM first (if any), then rule-based
+    # Remove duplicates while preserving order
+    seen = set()
+    for suggestion in llm_suggestions:
+        if suggestion.lower() not in seen:
+            suggestions.append(suggestion)
+            seen.add(suggestion.lower())
+    
+    for suggestion in rule_based_suggestions:
+        if suggestion.lower() not in seen:
+            suggestions.append(suggestion)
+            seen.add(suggestion.lower())
+    
+    # Limit total suggestions to 4-5
+    suggestions = suggestions[:5]
+    
+    # Generate quick actions based on intent
     if intent == IntentType.BOOKING or intent == IntentType.AVAILABILITY:
-        # Booking/Availability intent
-        has_guests = slots.get("guests") is not None
-        has_dates = slots.get("dates") is not None
-        has_room_type = slots.get("room_type") is not None
-        
-        if not has_dates:
-            suggestions.append("I want to check availability for specific dates")
-        if not has_guests:
-            suggestions.append("I have 4 guests")
-        if not has_room_type:
-            suggestions.append("I want Cottage 9")
-        
         quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
         quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
         
-        if not has_dates or not has_guests:
-            suggestions.append("What are the prices?")
-        suggestions.append("Tell me more about availability")
-        
     elif intent == IntentType.PRICING:
-        # Pricing intent
         quick_actions.append({"text": "Check Availability", "action": "availability", "type": "button"})
         quick_actions.append({"text": "View Pricing", "action": "pricing", "type": "button"})
         
-        suggestions.append("I want to book Cottage 9")
-        suggestions.append("What dates are available?")
-        suggestions.append("Tell me more about the cottages")
-        
     elif "image" in query_lower or "photo" in query_lower or "picture" in query_lower:
-        # Image request
         quick_actions.append({"text": "View More Images", "action": "images", "type": "button"})
         quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
         
-        suggestions.append("Show me Cottage 9 images")
-        suggestions.append("I want to book this cottage")
-        suggestions.append("What are the prices?")
-        
     elif intent == IntentType.LOCATION:
-        # Location intent
         quick_actions.append({"text": "Book Visit", "action": "booking", "type": "button"})
         quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
         
-        suggestions.append("I want to book for these dates")
-        suggestions.append("What are the prices?")
-        suggestions.append("Tell me more about nearby attractions")
+    elif intent == IntentType.ROOMS or intent == IntentType.SAFETY or intent == IntentType.FACILITIES:
+        quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
+        quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
         
     else:
-        # General FAQ - add booking-related suggestions
+        # General FAQ
         if is_widget_query:
             quick_actions.append({"text": "Book Now", "action": "booking", "type": "button"})
             quick_actions.append({"text": "Contact Manager", "action": "contact", "type": "button"})
-            
-            suggestions.append("I want to check availability")
-            suggestions.append("What are the prices?")
-            suggestions.append("Tell me more about booking")
     
     # If we have actions or suggestions, return them
     if quick_actions or suggestions:
@@ -153,6 +187,317 @@ def generate_follow_up_actions(
         }
     
     return None
+
+
+def count_sentences(text: str) -> int:
+    """
+    Count the number of sentences in a text.
+    
+    Args:
+        text: Text to count sentences in
+        
+    Returns:
+        Number of sentences
+    """
+    if not text or not text.strip():
+        return 0
+    
+    # Split by sentence-ending punctuation
+    sentences = re.split(r'[.!?]+', text)
+    # Filter out empty strings
+    sentences = [s.strip() for s in sentences if s.strip()]
+    return len(sentences)
+
+
+def get_max_sentences_for_intent(intent: IntentType) -> int:
+    """
+    Get the maximum number of sentences allowed for a given intent.
+    
+    Args:
+        intent: Intent type
+        
+    Returns:
+        Maximum number of sentences
+    """
+    max_sentences_map = {
+        IntentType.PRICING: 5,
+        IntentType.AVAILABILITY: 3,
+        IntentType.SAFETY: 4,
+        IntentType.ROOMS: 4,
+        IntentType.FACILITIES: 4,
+        IntentType.LOCATION: 4,
+    }
+    # Default to 6 for other intents (GENERAL, FAQ_QUESTION, etc.)
+    return max_sentences_map.get(intent, 6)
+
+
+def remove_pricing_template_aggressively(text: str) -> str:
+    """
+    Aggressively remove structured pricing template and capacity template from text.
+    Also removes template markers like "⚠️ GENERAL PRICING QUERY DETECTED" and "MANDATORY RESPONSE" that LLM might output.
+    This is a critical function to prevent templates from being shown to users.
+    
+    Args:
+        text: Text that may contain pricing or capacity template
+        
+    Returns:
+        Text with template removed
+    """
+    if not text:
+        return text
+    
+    # Check if template exists (pricing or capacity)
+    # CRITICAL: Check for MANDATORY RESPONSE first (capacity queries)
+    if ('MANDATORY RESPONSE' in text.upper() and 
+        'YOU MUST USE THIS EXACT ANSWER' in text.upper() and
+        'END OF MANDATORY RESPONSE' in text.upper()):
+        # This is a capacity query template - handle it immediately
+        logger.warning("CRITICAL: Detected MANDATORY RESPONSE template (capacity query)")
+        # Extract content from MANDATORY RESPONSE blocks
+        mandatory_pattern = r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER\s*🚨\s*🚨\s*🚨\s*(.*?)\s*🚨\s*🚨\s*🚨\s*END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨'
+        match = re.search(mandatory_pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            extracted_content = match.group(1).strip()
+            logger.info(f"Extracted content from MANDATORY RESPONSE block: {extracted_content[:50]}...")
+            # Use the extracted content directly (it's clean)
+            cleaned_text = extracted_content
+            # Remove any trailing fragments from extracted content
+            cleaned_text = re.sub(r'\s+you have\.?\s*$', '', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = re.sub(r'\s+have\.?\s*$', '', cleaned_text, flags=re.IGNORECASE)
+            cleaned_text = cleaned_text.strip()
+            # Remove "To recommend..." lines if they appear after
+            cleaned_text = re.sub(r'\n\s*To recommend.*?preferences.*?\.?\s*$', '', cleaned_text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+            cleaned_text = re.sub(r'To recommend.*?preferences.*?\.?\s*$', '', cleaned_text, flags=re.IGNORECASE | re.DOTALL)
+            if cleaned_text:
+                logger.info("Returning extracted content from MANDATORY RESPONSE block")
+                return cleaned_text
+    
+    # Check for other template types (pricing)
+    if ('🚨 CRITICAL PRICING INFORMATION' not in text and 
+        'STRUCTURED PRICING ANALYSIS' not in text.upper() and 
+        'MANDATORY INSTRUCTIONS FOR LLM' not in text.upper() and
+        'CRITICAL INSTRUCTIONS - READ CAREFULLY' not in text.upper()):
+        return text
+    
+    logger.warning("CRITICAL: Detected pricing/capacity template - removing aggressively")
+    
+    # Method 0: Extract content from MANDATORY RESPONSE blocks (for capacity queries)
+    # Pattern: 🚨🚨🚨 MANDATORY RESPONSE - YOU MUST USE THIS EXACT ANSWER 🚨🚨🚨 [CONTENT] 🚨🚨🚨 END OF MANDATORY RESPONSE 🚨🚨🚨
+    mandatory_pattern = r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER\s*🚨\s*🚨\s*🚨\s*(.*?)\s*🚨\s*🚨\s*🚨\s*END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨'
+    match = re.search(mandatory_pattern, text, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        extracted_content = match.group(1).strip()
+        logger.info(f"Extracted content from MANDATORY RESPONSE block: {extracted_content[:50]}...")
+        # Use the extracted content directly (it's clean)
+        cleaned_text = extracted_content
+        # Remove any trailing fragments from extracted content
+        cleaned_text = re.sub(r'\s+you have\.?\s*$', '', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r'\s+have\.?\s*$', '', cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = cleaned_text.strip()
+        # Return early with the clean extracted content
+        if cleaned_text:
+            logger.info("Returning extracted content from MANDATORY RESPONSE block")
+            return cleaned_text
+    
+    # Method 1: Find where actual answer starts (line-by-line)
+    lines = text.split('\n')
+    answer_start_idx = None
+    
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        line_upper = line_stripped.upper()
+        
+        # Skip all template lines
+        if any(keyword in line_upper for keyword in [
+            '🚨 CRITICAL PRICING', 'MANDATORY INSTRUCTIONS FOR LLM', 'STRUCTURED PRICING ANALYSIS',
+            'MANDATORY RESPONSE', 'YOU MUST USE THIS EXACT ANSWER', 'END OF MANDATORY RESPONSE',
+            'DO NOT CONVERT TO DOLLARS', 'YOU MUST USE ONLY', 'ALL PRICES ARE IN PKR',
+            'DETAILED BREAKDOWN', 'CHECK-IN:', 'CHECK-OUT:', 'GUESTS:', 'TOTAL NIGHTS:',
+            'WEEKDAY RATE:', 'WEEKEND RATE:', '🎯 TOTAL COST FOR', '⚠️', 'SEARCHING KNOWLEDGE BASE',
+            'CRITICAL INSTRUCTIONS', 'READ CAREFULLY'
+        ]) or line_stripped.startswith(('🚨', '⚠️', '🎯')) or re.match(r'^\d+\.\s+(You MUST|DO NOT|THE TOTAL COST)', line_stripped) or line_stripped.startswith('- Guests:') or line_stripped.startswith('- Check-in:') or line_stripped.startswith('- Check-out:') or line_stripped.startswith('- Total Nights:') or line_stripped.startswith('- Weekday Rate:') or line_stripped.startswith('- Weekend Rate:') or 'Weekday Nights' in line_stripped or 'Subtotal:' in line_stripped:
+            continue
+        
+        # Look for actual answer content
+        if len(line_stripped) > 10 and (
+            ('PKR' in line_stripped and any(word in line_stripped.lower() for word in ['cost', 'total', 'nights', 'night', 'for']))
+            or re.search(r'for \d+ nights?', line_stripped, re.IGNORECASE)
+            or re.search(r'total cost.*?PKR', line_stripped, re.IGNORECASE)
+            or re.search(r'cottage \d+.*?PKR', line_stripped, re.IGNORECASE)
+            or (line_stripped[0].isupper() and 'PKR' in line_stripped and not line_stripped.startswith(('🚨', '⚠️', '🎯')))
+        ):
+            answer_start_idx = i
+            break
+    
+    if answer_start_idx is not None:
+        result = '\n'.join(lines[answer_start_idx:]).strip()
+        logger.info(f"Removed template, kept answer starting at line {answer_start_idx}")
+        return result
+    
+    # Method 2: Aggressive regex removal (fallback)
+    result = text
+    # Remove entire template block from start
+    result = re.sub(
+        r'🚨\s*CRITICAL PRICING INFORMATION.*?Your answer MUST include.*?Total cost.*?PKR.*?(?=\n\n|For |The total|Total cost|Cottage \d+|PKR \d+|$)',
+        '',
+        result,
+        flags=re.IGNORECASE | re.DOTALL
+    )
+    # Remove all template patterns
+    result = re.sub(r'🚨\s*CRITICAL PRICING INFORMATION.*?⚠️\s*MANDATORY INSTRUCTIONS FOR LLM.*?(?=\n\n|For |The total|Total cost|Cottage \d+|PKR \d+|$)', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Remove MANDATORY RESPONSE blocks (for both pricing and capacity)
+    # Handle triple emoji format: 🚨🚨🚨 MANDATORY RESPONSE - YOU MUST USE THIS EXACT ANSWER 🚨🚨🚨 ... 🚨🚨🚨 END OF MANDATORY RESPONSE 🚨🚨🚨
+    # Pattern 1: Match the full block from first 🚨🚨🚨 to last 🚨🚨🚨 (most aggressive)
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Pattern 2: Match with "YOU MUST USE THIS EXACT ANSWER" in the middle
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER.*?🚨\s*🚨\s*🚨.*?END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Pattern 3: Match without triple emoji at end
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Pattern 4: Match single emoji format
+    result = re.sub(r'🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Pattern 5: Match just the markers
+    result = re.sub(r'MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER.*?END OF MANDATORY RESPONSE', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'STRUCTURED PRICING ANALYSIS.*?⚠️\s*MANDATORY INSTRUCTIONS.*?(?=\n\n|For |The total|Total cost|Cottage \d+|PKR \d+|$)', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'ALL PRICES ARE IN PKR.*?⚠️\s*MANDATORY INSTRUCTIONS.*?(?=\n\n|For |The total|Total cost|Cottage \d+|PKR \d+|$)', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'DETAILED BREAKDOWN.*?⚠️\s*MANDATORY INSTRUCTIONS.*?(?=\n\n|For |The total|Total cost|Cottage \d+|PKR \d+|$)', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Remove numbered instructions
+    result = re.sub(r'\n\d+\.\s+(You MUST|DO NOT|THE TOTAL COST|Your answer MUST|The dates|The breakdown|Show the breakdown|YOU MUST MENTION|YOUR ENTIRE RESPONSE|DO NOT add|DO NOT list|DO NOT generate|DO NOT ask|DO NOT say).*?(?=\n|$)', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    # Remove emoji markers and template prefixes
+    result = re.sub(r'^[🚨⚠️🎯]\s*', '', result, flags=re.MULTILINE)
+    result = re.sub(r'^⚠️\s*GENERAL.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    result = re.sub(r'^GENERAL PRICING QUERY DETECTED.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    # Remove MANDATORY RESPONSE markers (for both pricing and capacity templates)
+    # Handle triple emoji format: 🚨🚨🚨 MANDATORY RESPONSE ... 🚨🚨🚨 END OF MANDATORY RESPONSE
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?🚨\s*🚨\s*🚨\s*END OF MANDATORY RESPONSE.*?\n', '', result, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    result = re.sub(r'🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE.*?\n', '', result, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    result = re.sub(r'YOU MUST USE THIS EXACT ANSWER.*?END OF MANDATORY RESPONSE.*?\n', '', result, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    result = re.sub(r'MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER.*?END OF MANDATORY RESPONSE', '', result, flags=re.IGNORECASE | re.DOTALL)
+    # Remove CRITICAL INSTRUCTIONS blocks
+    result = re.sub(r'⚠️\s*⚠️\s*⚠️\s*CRITICAL INSTRUCTIONS.*?READ CAREFULLY.*?\n', '', result, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    result = re.sub(r'CRITICAL INSTRUCTIONS.*?READ CAREFULLY.*?\n', '', result, flags=re.IGNORECASE | re.DOTALL | re.MULTILINE)
+    # Remove template data lines
+    result = re.sub(r'^[-]\s*(Guests:|Check-in:|Check-out:|Total Nights:|Weekday Rate:|Weekend Rate:).*$', '', result, flags=re.MULTILINE)
+    result = re.sub(r'^Weekday Nights.*?Subtotal:.*$', '', result, flags=re.MULTILINE | re.DOTALL)
+    # Remove "Searching knowledge base..."
+    result = re.sub(r'Searching knowledge base\.\.\..*$', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # Final pass: Remove any remaining lines that start with template markers
+    lines = result.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line_stripped = line.strip()
+        line_upper = line_stripped.upper()
+        # Skip lines that are clearly template markers
+        if (line_stripped.startswith(('🚨', '⚠️', '🎯')) or
+            'MANDATORY RESPONSE' in line_upper or
+            'YOU MUST USE THIS EXACT ANSWER' in line_upper or
+            'END OF MANDATORY RESPONSE' in line_upper or
+            ('CRITICAL INSTRUCTIONS' in line_upper and 'READ CAREFULLY' in line_upper) or
+            ('YOUR ENTIRE RESPONSE MUST START WITH' in line_upper) or
+            (line_stripped.startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.')) and 
+             any(word in line_upper for word in ['YOU MUST', 'DO NOT', 'YOUR ENTIRE RESPONSE', 'DO NOT ADD', 'DO NOT LIST', 'DO NOT GENERATE', 'DO NOT ASK', 'DO NOT SAY'])) or
+            ('DO NOT ADD' in line_upper and 'Swiss Cottages Bhurban offers' in line_upper) or
+            ('DO NOT LIST' in line_upper and 'cottages' in line_upper) or
+            ('DO NOT GENERATE' in line_upper and 'response' in line_upper) or
+            ('DO NOT ASK' in line_upper and ('group size' in line_upper or 'dates' in line_upper)) or
+            ('DO NOT SAY' in line_upper and ('share your dates' in line_upper or 'preferences' in line_upper)) or
+            ('AFTER THE MANDATORY RESPONSE' in line_upper) or
+            ('FOR FAMILIES: THE MANDATORY RESPONSE' in line_upper) or
+            ('TO RECOMMEND THE BEST COTTAGE' in line_upper and 'PLEASE SHARE' in line_upper)):
+            continue
+        cleaned_lines.append(line)
+    
+    result = '\n'.join(cleaned_lines).strip()
+    
+    # Remove any remaining standalone template markers at the start
+    result = re.sub(r'^(🚨\s*)+.*?MANDATORY.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    result = re.sub(r'^(⚠️\s*)+.*?CRITICAL.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    result = re.sub(r'^(🚨\s*🚨\s*🚨\s*)+.*?MANDATORY.*?END.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    result = re.sub(r'^(⚠️\s*⚠️\s*⚠️\s*)+.*?CRITICAL.*?\n', '', result, flags=re.IGNORECASE | re.MULTILINE)
+    
+    # Final aggressive pass: Remove any remaining MANDATORY RESPONSE blocks that might have been missed
+    # Match the exact format: 🚨🚨🚨 MANDATORY RESPONSE - YOU MUST USE THIS EXACT ANSWER 🚨🚨🚨 ... 🚨🚨🚨 END OF MANDATORY RESPONSE 🚨🚨🚨
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER.*?🚨\s*🚨\s*🚨.*?END OF MANDATORY RESPONSE\s*🚨\s*🚨\s*🚨', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'🚨\s*🚨\s*🚨\s*MANDATORY RESPONSE.*?END OF MANDATORY RESPONSE.*?', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'MANDATORY RESPONSE.*?YOU MUST USE THIS EXACT ANSWER.*?END OF MANDATORY RESPONSE', '', result, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Remove "To recommend the best cottage..." lines that appear after capacity templates
+    result = re.sub(r'\n\s*To recommend the best cottage.*?preferences.*?\.?\s*', '', result, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    result = re.sub(r'To recommend the best cottage.*?preferences.*?\.?\s*', '', result, flags=re.IGNORECASE | re.DOTALL)
+    result = re.sub(r'To recommend.*?please share.*?dates.*?preferences.*?\.?\s*', '', result, flags=re.IGNORECASE | re.DOTALL)
+    
+    # Clean up any remaining emoji markers at the start
+    result = re.sub(r'^[🚨⚠️🎯\s]+', '', result, flags=re.MULTILINE)
+    
+    result = result.strip()
+    
+    # Final cleanup: Remove any trailing fragments like "you have." that might remain
+    result = re.sub(r'\s+you have\.?\s*$', '', result, flags=re.IGNORECASE)
+    result = re.sub(r'\s+have\.?\s*$', '', result, flags=re.IGNORECASE)
+    
+    # Remove any remaining "To recommend..." lines that might have been missed
+    result = re.sub(r'\n\s*To recommend.*?preferences.*?\.?\s*$', '', result, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+    result = re.sub(r'To recommend.*?preferences.*?\.?\s*$', '', result, flags=re.IGNORECASE | re.DOTALL)
+    
+    result = result.strip()
+    logger.info("Removed template using aggressive regex fallback")
+    return result
+
+
+def truncate_to_max_sentences(text: str, max_sentences: int) -> str:
+    """
+    Truncate text to a maximum number of sentences, keeping only the core answer.
+    Removes tips, suggestions, and follow-up questions.
+    
+    Args:
+        text: Text to truncate
+        max_sentences: Maximum number of sentences
+        
+    Returns:
+        Truncated text
+    """
+    if not text or not text.strip():
+        return text
+    
+    current_count = count_sentences(text)
+    if current_count <= max_sentences:
+        return text
+    
+    # Split into sentences
+    # Use a more sophisticated approach: split by sentence endings but preserve them
+    parts = re.split(r'([.!?]+(?:\s|$))', text)
+    sentences = []
+    current_sentence = ""
+    
+    for part in parts:
+        if re.match(r'^[.!?]+', part):
+            # Punctuation - end of sentence
+            current_sentence += part
+            if current_sentence.strip():
+                sentences.append(current_sentence.strip())
+                current_sentence = ""
+        else:
+            current_sentence += part
+    
+    if current_sentence.strip():
+        sentences.append(current_sentence.strip())
+    
+    # Take only the first max_sentences
+    truncated = ' '.join(sentences[:max_sentences])
+    
+    # Remove common tip/suggestion patterns that might remain
+    tip_patterns = [
+        r'💡.*',
+        r'📷.*',
+        r'Would you like.*',
+        r'Ready to book.*',
+        r'Tip:.*',
+    ]
+    for pattern in tip_patterns:
+        truncated = re.sub(pattern, '', truncated, flags=re.IGNORECASE | re.DOTALL)
+    
+    return truncated.strip()
 
 
 # Load Dropbox image configuration
@@ -354,7 +699,8 @@ def detect_image_request(query: str, slot_manager=None, context_tracker=None) ->
     
     # Exclude non-image contexts that might contain similar keywords
     exclusion_patterns = [
-        "availability", "available", "book", "booking", "price", "pricing",
+        "availability", "available", "book", "booking", "want to book", "i want to book",
+        "reserve", "reservation", "price", "pricing", "cost", "how much",
         "contact", "manager", "location", "nearby", "capacity", "guests"
     ]
     
@@ -461,6 +807,17 @@ def should_offer_images(query: str, answer: str) -> tuple[bool, Optional[str]]:
     if any(keyword in query_lower for keyword in ["image", "images", "photo", "photos", "picture", "pictures", "show me", "see", "view"]):
         return False, None
     
+    # Exclude booking, availability, pricing, and other non-image contexts
+    exclusion_patterns = [
+        "book", "booking", "reserve", "reservation", "want to book", "i want to book",
+        "available", "availability", "check availability", "price", "pricing", "cost",
+        "contact", "manager", "location", "nearby", "capacity", "guests", "how much"
+    ]
+    
+    # If query is about booking, availability, pricing, etc., do NOT offer images
+    if any(pattern in query_lower for pattern in exclusion_patterns):
+        return False, None
+    
     # Check if answer mentions a specific cottage
     cottage_num = extract_cottage_from_text(answer)
     if cottage_num:
@@ -472,8 +829,49 @@ def should_offer_images(query: str, answer: str) -> tuple[bool, Optional[str]]:
     return False, None
 
 
-def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int = 6) -> List[Path]:
-    """Get image paths for a specific cottage."""
+def detect_image_type_request(query: str) -> Optional[str]:
+    """
+    Detect if the query is asking for a specific type of images (kitchen, bathroom, bedroom, etc.).
+    
+    Args:
+        query: User query string
+        
+    Returns:
+        Image type string (e.g., "kitchen", "bathroom", "bedroom") or None
+    """
+    query_lower = query.lower()
+    
+    # Map of keywords to image types
+    image_type_keywords = {
+        "kitchen": ["kitchen", "cooking", "cook"],
+        "bathroom": ["bathroom", "bath", "toilet", "washroom", "restroom"],
+        "bedroom": ["bedroom", "bed", "sleeping"],
+        "living": ["living room", "lounge", "sitting room", "living area"],
+        "exterior": ["exterior", "outside", "outside view", "external", "facade"],
+        "balcony": ["balcony", "terrace", "patio", "deck"],
+        "view": ["view", "scenic", "landscape", "mountain view"],
+    }
+    
+    for image_type, keywords in image_type_keywords.items():
+        if any(keyword in query_lower for keyword in keywords):
+            return image_type
+    
+    return None
+
+
+def get_cottage_images_by_type(cottage_number: str, root_folder: Path, image_type: str = None, max_images: int = 6) -> List[Path]:
+    """
+    Get image paths for a specific cottage, optionally filtered by image type.
+    
+    Args:
+        cottage_number: Cottage number (e.g., "7", "9", "11")
+        root_folder: Root folder of the project
+        image_type: Optional image type to filter by (e.g., "kitchen", "bathroom")
+        max_images: Maximum number of images to return
+        
+    Returns:
+        List of image file paths
+    """
     image_patterns = [
         f"Swiss Cottage {cottage_number} Images*",
         f"*Cottage {cottage_number} Images*",
@@ -487,7 +885,51 @@ def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int =
             for folder in folders:
                 if not folder.is_dir():
                     continue
+                
+                # If image_type is specified, try to find matching subfolder or files
+                if image_type:
+                    # Check subfolders for image type
+                    type_folders = []
+                    try:
+                        for subfolder in folder.iterdir():
+                            if subfolder.is_dir():
+                                subfolder_lower = subfolder.name.lower()
+                                if image_type.lower() in subfolder_lower:
+                                    type_folders.append(subfolder)
+                    except (NotADirectoryError, PermissionError):
+                        pass
                     
+                    # If found type-specific folders, search only there
+                    if type_folders:
+                        for type_folder in type_folders:
+                            images = (
+                                list(type_folder.glob("*.jpg")) + list(type_folder.glob("*.jpeg")) +
+                                list(type_folder.glob("*.png")) + list(type_folder.glob("*.webp")) +
+                                list(type_folder.glob("*.JPG")) + list(type_folder.glob("*.JPEG")) +
+                                list(type_folder.glob("*.PNG"))
+                            )
+                            image_paths.extend(images)
+                        continue
+                    else:
+                        # No type-specific folder found, check file names
+                        all_images = (
+                            list(folder.glob("**/*.jpg")) + list(folder.glob("**/*.jpeg")) +
+                            list(folder.glob("**/*.png")) + list(folder.glob("**/*.webp")) +
+                            list(folder.glob("**/*.JPG")) + list(folder.glob("**/*.JPEG")) +
+                            list(folder.glob("**/*.PNG"))
+                        )
+                        # Filter by image type in filename
+                        filtered_images = [
+                            img for img in all_images
+                            if image_type.lower() in img.name.lower() or image_type.lower() in str(img.parent).lower()
+                        ]
+                        if filtered_images:
+                            image_paths.extend(filtered_images)
+                            continue
+                        # If no type-specific images found, return empty (don't fall through to all images)
+                        return []
+                
+                # No image type filter, get all images
                 images = (
                     list(folder.glob("**/*.jpg")) + list(folder.glob("**/*.jpeg")) +
                     list(folder.glob("**/*.png")) + list(folder.glob("**/*.webp")) +
@@ -511,6 +953,11 @@ def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int =
     
     unique_paths = list(set(image_paths))[:max_images]
     return unique_paths
+
+
+def get_cottage_images(cottage_number: str, root_folder: Path, max_images: int = 6) -> List[Path]:
+    """Get image paths for a specific cottage."""
+    return get_cottage_images_by_type(cottage_number, root_folder, image_type=None, max_images=max_images)
 
 
 def validate_and_fix_currency(answer: str, context: str = "") -> str:
@@ -607,6 +1054,12 @@ def clean_answer_text(answer: str) -> str:
         r"[-=]{3,}\s*answer:\s*.*?[-=]{3,}\s*",
         # Pattern for "The refined answer remains the same" or similar endings
         r"The refined answer (?:remains the same|is the same|remains unchanged).*?\.?\s*",
+        # Pattern for "Thank you for the additional context. I've refined the answer..." through "Here are..."
+        r"Thank you for the additional context\.\s*I've refined the answer.*?(?:Here are|Here is|The answer is|The facilities are|The amenities are)",
+        # Pattern for "I've refined the answer to provide more accurate information..."
+        r"I've refined the answer to provide more accurate information\.\s*(?:Since.*?limited.*?I'll stick to.*?\.\s*)?(?:Here are|Here is|The answer is)",
+        # Pattern for "Since specific details about X are limited, I'll stick to..."
+        r"Since specific details about.*?are limited.*?I'll stick to.*?\.\s*(?:Here are|Here is)",
     ]
     
     cleaned = answer
@@ -675,6 +1128,10 @@ def clean_answer_text(answer: str) -> str:
         r"The refined answer remains:?\s*",
         r"Based on the context information provided above, the refined answer is:?\s*",
         r"Based on the context information provided above, the refined answer remains:?\s*",
+        # Patterns for "Thank you for the additional context" reasoning
+        r"^Thank you for the additional context\.\s*I've refined the answer.*?\.\s*",
+        r"^I've refined the answer to provide more accurate information\.\s*",
+        r"^Since specific details about.*?are limited.*?I'll stick to.*?\.\s*",
     ]
     
     for pattern in reasoning_patterns:
@@ -683,9 +1140,19 @@ def clean_answer_text(answer: str) -> str:
     # Remove structured pricing analysis templates (internal instructions that shouldn't be shown to users)
     # This is CRITICAL - the entire template must be removed before showing to users
     
+    # Remove template markers that LLM might output at the start
+    template_start_patterns = [
+        r"^⚠️\s*GENERAL.*?\n",
+        r"^⚠️\s*⚠️\s*⚠️.*?\n",
+        r"^🚨\s*🚨\s*🚨.*?\n",
+        r"^GENERAL PRICING QUERY DETECTED.*?\n",
+    ]
+    for pattern in template_start_patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE | re.MULTILINE)
+    
     # Quick check: If answer starts with template markers, find where actual answer begins
     # Enhanced to catch capacity templates too
-    if cleaned.strip().startswith('🚨') or '🚨 CRITICAL PRICING INFORMATION' in cleaned or 'CRITICAL CAPACITY INFORMATION' in cleaned:
+    if cleaned.strip().startswith('🚨') or cleaned.strip().startswith('⚠️') or '🚨 CRITICAL PRICING INFORMATION' in cleaned or 'CRITICAL CAPACITY INFORMATION' in cleaned:
         # Find the first line that contains actual pricing answer (not template instructions)
         lines = cleaned.split('\n')
         answer_start_idx = None
@@ -1092,6 +1559,108 @@ def check_document_relevance(query: str, documents: list) -> tuple[bool, str]:
     query_lower = query.lower()
     documents_text = " ".join([doc.page_content.lower() for doc in documents])
     
+    # CRITICAL: First check if query is about completely unrelated topics (world knowledge, countries, etc.)
+    # These should NEVER be answered using Swiss Cottages context
+    unrelated_topics = {
+        "china": ["china", "chinese", "beijing", "shanghai", "great wall"],
+        "usa": ["usa", "united states", "america", "american", "us president", "president of usa", "president of united states"],
+        "president": ["president", "presidential", "presidency"],
+        "country": ["country", "countries", "nation", "national"],
+        "world": ["world", "global", "international"],
+    }
+    
+    # Check if query is about unrelated topics
+    query_is_unrelated = False
+    unrelated_topic = None
+    for topic, keywords in unrelated_topics.items():
+        if any(keyword in query_lower for keyword in keywords):
+            # Check if documents are NOT about Swiss Cottages
+            swiss_cottages_indicators = [
+                "swiss cottages", "bhurban", "murree", "cottage 7", "cottage 9", "cottage 11",
+                "cottage7", "cottage9", "cottage11", "pakistan", "pakistani"
+            ]
+            has_swiss_cottages_content = any(indicator in documents_text for indicator in swiss_cottages_indicators)
+            
+            if not has_swiss_cottages_content:
+                query_is_unrelated = True
+                unrelated_topic = topic
+                break
+    
+    if query_is_unrelated:
+        if unrelated_topic == "china":
+            return False, "Your question is about China, but I only have information about Swiss Cottages Bhurban in Pakistan. I cannot answer questions about other countries or general world knowledge."
+        elif unrelated_topic in ["usa", "president"]:
+            return False, "Your question is about the USA or world leaders, but I only have information about Swiss Cottages Bhurban in Pakistan. I cannot answer questions about other countries, world leaders, or general world knowledge."
+        else:
+            return False, "Your question is about a topic outside my knowledge base. I only have information about Swiss Cottages Bhurban in Pakistan. I cannot answer questions about other topics or general world knowledge."
+    
+    # CRITICAL: Ensure documents are actually about Swiss Cottages
+    # If documents don't mention Swiss Cottages, Bhurban, or related terms, they're not relevant
+    swiss_cottages_indicators = [
+        "swiss cottages", "bhurban", "murree", "cottage 7", "cottage 9", "cottage 11",
+        "cottage7", "cottage9", "cottage11", "pakistan", "pakistani", "murree hills"
+    ]
+    has_swiss_cottages_content = any(indicator in documents_text for indicator in swiss_cottages_indicators)
+    
+    # Exception: For safety/security queries, allow documents with safety keywords even if they don't explicitly mention Swiss Cottages
+    # (since they're from the knowledge base, they're implicitly about Swiss Cottages)
+    is_safety_query = any(word in query_lower for word in ["safe", "safety", "security", "secure", "guard", "guards", "gated", "emergency"])
+    safety_keywords = ["guard", "guards", "security", "gated community", "secure", "safety", "emergency", "safety measures", "security measures"]
+    has_safety_content = any(keyword in documents_text for keyword in safety_keywords)
+    
+    # Exception: For facilities queries, allow documents with facilities keywords even if they mention Pearl Continental
+    # (since they're from the knowledge base, they're implicitly about Swiss Cottages)
+    is_facilities_query = any(phrase in query_lower for phrase in [
+        "facility", "facilities", "amenity", "amenities", "feature", "features",
+        "kitchen", "terrace", "balcony", "socializing", "relaxation", "what is available",
+        "what facilities", "facilities available", "facilities are"
+    ])
+    facilities_keywords = ["kitchen", "facility", "facilities", "amenity", "amenities", "terrace", "balcony", "lounge", "parking", "wifi", "tv", "netflix", "heating", "bbq", "socializing", "relaxation"]
+    has_facilities_content = any(keyword in documents_text.lower() for keyword in facilities_keywords)
+    
+    # CRITICAL: Reject documents that are primarily about Pearl Continental or PC Bhurban
+    # BUT be very lenient - only reject if clearly NOT about Swiss Cottages
+    # IMPORTANT: If documents are about Swiss Cottages (have Swiss Cottages indicators), allow them
+    # even if they mention Pearl Continental (PC Bhurban is nearby, so it's normal to mention it)
+    
+    # Check for Pearl Continental mentions
+    pearl_continental_indicators = ["pearl continental", "pc bhurban", "pearl continental bhurban"]
+    pearl_mentions = sum(documents_text.lower().count(indicator) for indicator in pearl_continental_indicators)
+    
+    # ONLY reject if:
+    # 1. Documents mention Pearl Continental AND
+    # 2. Documents do NOT have Swiss Cottages content (no Swiss Cottages indicators at all)
+    # EXCEPTION: If it's a facilities query and documents have facilities content, allow them
+    # (documents in knowledge base about facilities are implicitly about Swiss Cottages)
+    if pearl_mentions > 0 and not has_swiss_cottages_content:
+        # Allow if it's a facilities query with facilities content (implicitly about Swiss Cottages)
+        if is_facilities_query and has_facilities_content:
+            logger.info(f"Allowing facilities documents with Pearl Continental mention for facilities query (implicitly about Swiss Cottages)")
+        else:
+            logger.warning(f"Rejecting documents - Pearl Continental mentioned but no Swiss Cottages content (Pearl mentions: {pearl_mentions})")
+            return False, "The retrieved documents are about Pearl Continental Bhurban, but I only have information about Swiss Cottages Bhurban. Please ask about Swiss Cottages Bhurban facilities and services."
+    
+    # Exception: For date/booking queries, allow documents even if they don't explicitly mention Swiss Cottages
+    # (since they're from the knowledge base and user is providing dates, they're implicitly about Swiss Cottages)
+    is_date_query = any(word in query_lower for word in [
+        "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february",
+        "from", "to", "stay", "staying", "booking", "book", "dates", "check-in", "check-out"
+    ]) and any(word in query_lower for word in ["march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "january", "february", "stay", "staying", "nights"])
+    
+    if not has_swiss_cottages_content and len(documents) > 0:
+        # If this is a safety query and documents contain safety keywords, allow them
+        if is_safety_query and has_safety_content:
+            logger.info(f"Allowing safety documents without explicit Swiss Cottages indicators for safety query")
+        # If this is a facilities query and documents contain facilities keywords, allow them
+        elif is_facilities_query and has_facilities_content:
+            logger.info(f"Allowing facilities documents without explicit Swiss Cottages indicators for facilities query")
+        # If this is a date/booking query, allow documents (user is providing dates for booking/pricing)
+        elif is_date_query:
+            logger.info(f"Allowing documents for date/booking query (user provided dates: {query_lower[:100]})")
+        else:
+            # Documents exist but don't mention Swiss Cottages - this is a mismatch
+            return False, "The retrieved documents don't contain information about Swiss Cottages Bhurban. I only have information about Swiss Cottages Bhurban in Pakistan and cannot answer questions about other topics."
+    
     location_keywords = {
         "india": ["pakistan", "bhurban", "murree", "azad kashmir", "pakistani"],
         "pakistan": ["india", "mumbai", "delhi", "bangalore", "indian"],
@@ -1359,6 +1928,11 @@ async def chat(
         # Pre-processing: Handle explicit image requests early
         if is_image_request and cottage_numbers:
             logger.info(f"Detected explicit image request for cottages: {cottage_numbers}")
+            
+            # Detect if user is asking for a specific image type
+            image_type = detect_image_type_request(request.question)
+            logger.info(f"Detected image type request: {image_type}")
+            
             # Get images directly without going through full RAG
             root_folder = get_root_folder()
             dropbox_config = get_dropbox_config()
@@ -1367,6 +1941,7 @@ async def chat(
             
             # Group images by cottage
             cottage_images_dict = {}
+            no_images_found = []
             
             for cottage_num in cottage_numbers:
                 cottage_images = []
@@ -1376,12 +1951,13 @@ async def chat(
                     dropbox_urls = get_dropbox_image_urls(cottage_num, max_images=6)
                     logger.info(f"Got {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num}")
                     if dropbox_urls:
+                        # Note: Dropbox URLs don't support type filtering yet
                         cottage_images.extend(dropbox_urls)
                         logger.info(f"Using {len(dropbox_urls)} Dropbox URLs for cottage {cottage_num}")
                     else:
                         logger.warning(f"No Dropbox URLs found for cottage {cottage_num}, falling back to local files")
-                        # Fallback to local files
-                        images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                        # Fallback to local files with type filtering
+                        images = get_cottage_images_by_type(cottage_num, root_folder, image_type=image_type, max_images=6)
                         for img_path in images:
                             rel_path = img_path.relative_to(root_folder)
                             from urllib.parse import quote
@@ -1391,7 +1967,7 @@ async def chat(
                             cottage_images.append(image_url)
                 else:
                     logger.info(f"Dropbox not enabled, using local files for cottage {cottage_num}")
-                    images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                    images = get_cottage_images_by_type(cottage_num, root_folder, image_type=image_type, max_images=6)
                     for img_path in images:
                         rel_path = img_path.relative_to(root_folder)
                         from urllib.parse import quote
@@ -1402,13 +1978,21 @@ async def chat(
                 
                 if cottage_images:
                     cottage_images_dict[cottage_num] = cottage_images
+                else:
+                    no_images_found.append(cottage_num)
             
             if cottage_images_dict:
                 # Generate a brief response
                 if len(cottage_numbers) == 1:
-                    answer = f"Here are images of Cottage {cottage_numbers[0]}:"
+                    if image_type:
+                        answer = f"Here are {image_type} images of Cottage {cottage_numbers[0]}:"
+                    else:
+                        answer = f"Here are images of Cottage {cottage_numbers[0]}:"
                 else:
-                    answer = f"Here are images of the cottages:"
+                    if image_type:
+                        answer = f"Here are {image_type} images of the cottages:"
+                    else:
+                        answer = f"Here are images of the cottages:"
                 
                 total_images = sum(len(imgs) for imgs in cottage_images_dict.values())
                 logger.info(f"Returning {total_images} image URLs grouped by cottage: {list(cottage_images_dict.keys())}")
@@ -1422,8 +2006,18 @@ async def chat(
                     cottage_images=cottage_images_dict,  # Now a dict: {"7": [urls], "9": [urls], "11": [urls]}
                 )
             else:
-                # No images found, provide helpful message
-                answer = "I'm sorry, I couldn't find images for the requested cottages. Please contact us for more information."
+                # No images found for the requested type
+                if image_type:
+                    cottage_text = f"Cottage {', '.join(no_images_found)}" if no_images_found else "the requested cottage"
+                    answer = (
+                        f"I'm sorry, I don't have {image_type} images available for {cottage_text} at the moment.\n\n"
+                        f"You can ask for general images of {cottage_text} to see what's available."
+                    )
+                else:
+                    # No images found at all
+                    cottage_text = f"Cottage {', '.join(no_images_found)}" if no_images_found else "the requested cottages"
+                    answer = f"I'm sorry, I couldn't find images for {cottage_text}. Please contact us for more information."
+                
                 return ChatResponse(
                     answer=answer,
                     sources=[],
@@ -1503,12 +2097,30 @@ async def chat(
             return ChatResponse(
                 answer=answer,
                 sources=[],
-                intent="cottage_listing",
+                intent="rooms",  # Map cottage_listing to rooms intent
                 session_id=request.session_id,
             )
         
+        # Check for capacity queries BEFORE cottage listing handler
+        # IMPORTANT: Capacity queries should NOT trigger static cottage listing - they need LLM reasoning
+        capacity_handler = get_capacity_handler()
+        is_capacity_query = capacity_handler.is_capacity_query(request.question)
+        
         # Flexible cottage listing detection using keyword combination
         # Check if query contains "cottages" + listing keywords
+        # IMPORTANT: Exclude pricing queries, capacity queries, AND facilities queries - they should NOT trigger cottage listing
+        is_pricing_query = any(phrase in query_lower for phrase in [
+            "pricing", "price", "prices", "cost", "rate", "rates", "how much"
+        ])
+        
+        # Check if this is a facilities query - these should go to RAG, not static listing
+        is_facilities_query = any(phrase in query_lower for phrase in [
+            "facility", "facilities", "amenity", "amenities", "feature", "features",
+            "kitchen", "terrace", "balcony", "socializing", "relaxation", "what is available",
+            "chef", "service", "services", "cooking", "food", "meal", "bbq", "grill",
+            "wifi", "internet", "tv", "netflix", "parking", "heating", "lounge", "bbq facilities"
+        ])
+        
         has_cottages_keyword = "cottage" in query_lower or "cottages" in query_lower
         listing_keywords = [
             "you have", "do you have", "available", "offer", "list", 
@@ -1526,7 +2138,8 @@ async def chat(
         has_explicit_pattern = any(pattern in query_lower for pattern in explicit_listing_patterns)
         
         # If query is about listing cottages (not general info about swiss cottages)
-        if has_cottages_keyword and (has_listing_intent or has_explicit_pattern):
+        # AND it's NOT a pricing query AND it's NOT a capacity query AND it's NOT a facilities query
+        if has_cottages_keyword and (has_listing_intent or has_explicit_pattern) and not is_pricing_query and not is_capacity_query and not is_facilities_query:
             # Additional check: exclude general "tell me about swiss cottages" queries
             # These should go to RAG for general information
             is_general_info_query = (
@@ -1551,14 +2164,13 @@ async def chat(
                     "- Heating system\n"
                     "- Secure parking\n\n"
                     "Would you like to know more about:\n"
-                    "- Pricing for a specific cottage\n"
                     "- Which cottage is best for your group size\n"
                     "- Availability and booking information"
                 )
                 return ChatResponse(
                     answer=answer,
                     sources=[],
-                    intent="cottage_listing",
+                    intent="rooms",  # Map cottage_listing to rooms intent
                     session_id=request.session_id,
                 )
         
@@ -1572,11 +2184,11 @@ async def chat(
                     answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
                     answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
                     answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
-                answer += "Would you like to know about pricing or availability?"
+                answer += "Would you like to know about availability or booking?"
                 return ChatResponse(
                     answer=answer,
                     sources=[],
-                    intent="cottage_listing",
+                    intent="rooms",  # Map cottage_listing to rooms intent
                     session_id=request.session_id,
                 )
         
@@ -1590,11 +2202,11 @@ async def chat(
                     answer += f"**Cottage {cottage.number}** - {cottage.description}\n"
                     answer += f"- Base capacity: Up to {cottage.base_capacity} guests\n"
                     answer += f"- Maximum capacity: {cottage.max_capacity} guests\n\n"
-                answer += "Would you like to know about pricing or availability?"
+                answer += "Would you like to know about availability or booking?"
                 return ChatResponse(
                     answer=answer,
                     sources=[],
-                    intent="cottage_listing",
+                    intent="rooms",  # Map cottage_listing to rooms intent
                     session_id=request.session_id,
                 )
         
@@ -1653,10 +2265,15 @@ async def chat(
                 "What would you like to know more about?"
             )
             # Generate follow-up actions for help
+            # Convert chat_history to list format for recommendations
+            chat_history_list = list(chat_history) if chat_history else []
             follow_up_actions = generate_follow_up_actions(
                 intent,
                 slot_manager.get_slots(),
                 request.question,
+                context_tracker=context_tracker,
+                chat_history=chat_history_list,
+                llm_client=llm,
                 is_widget_query=is_widget_query
             )
             return ChatResponse(
@@ -1806,14 +2423,23 @@ async def chat(
         # This helps when user says "tell me the pricing" after "we are a group of 5 can we stay 4 nights"
         if chat_history and len(chat_history) > 0:
             # Look through recent messages for slot information that might not be in current query
+            date_extractor = get_date_extractor()
             for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
                 if isinstance(message, str) and "question:" in message:
                     # Extract question from chat history format: "question: ..., answer: ..."
                     parts = message.split("question:", 1)
                     if len(parts) > 1:
-                        prev_query = parts[1].split("answer:")[0].strip()
+                        full_message = parts[1]
+                        # Split into question and answer
+                        if "answer:" in full_message:
+                            prev_query = full_message.split("answer:")[0].strip()
+                            prev_answer = full_message.split("answer:")[1].strip() if "answer:" in full_message else ""
+                        else:
+                            prev_query = full_message.strip()
+                            prev_answer = ""
+                        
                         if prev_query and prev_query != request.question:
-                            # Try to extract slots from previous messages
+                            # Try to extract slots from previous questions
                             prev_slots = slot_manager.extract_slots(prev_query, intent)
                             # Merge previous slots that aren't in current extraction
                             for key, value in prev_slots.items():
@@ -1821,14 +2447,50 @@ async def chat(
                                     # Only add if slot is not already set in slot_manager
                                     if key not in slot_manager.slots or slot_manager.slots[key] is None:
                                         extracted_slots[key] = value
-                                        logger.info(f"Retrieved {key}={value} from chat history: '{prev_query[:50]}...'")
+                                        logger.info(f"Retrieved {key}={value} from chat history question: '{prev_query[:50]}...'")
+                            
+                            # CRITICAL: Also extract dates from previous QUESTIONS (not just answers)
+                            # This handles cases like "we are planning from 13 feb to 19 feb"
+                            if "dates" not in extracted_slots:
+                                date_range = date_extractor.extract_date_range(prev_query)
+                                if date_range:
+                                    extracted_slots["dates"] = date_range
+                                    logger.info(f"✅ Extracted dates from chat history question: {date_range.get('start_date')} to {date_range.get('end_date')}, {date_range.get('nights')} nights")
+                                    logger.info(f"   Source text: '{prev_query[:100]}...'")
+                        
+                        # CRITICAL: Also extract dates from previous ANSWERS (bot responses)
+                        # This handles cases where bot mentioned dates like "February 11, 2026, to February 15, 2026"
+                        if prev_answer and "dates" not in extracted_slots:
+                            # Try to extract dates from the answer text
+                            date_range = date_extractor.extract_date_range(prev_answer)
+                            if date_range:
+                                extracted_slots["dates"] = date_range
+                                logger.info(f"✅ Extracted dates from chat history answer: {date_range.get('start_date')} to {date_range.get('end_date')}, {date_range.get('nights')} nights")
+                                logger.info(f"   Source text: '{prev_answer[:100]}...'")
         
         slot_manager.update_slots(extracted_slots)
         
         # Update context_tracker.current_cottage if a cottage was extracted
+        # But only for queries that should use it (prevents contamination for general info queries)
         current_cottage = slot_manager.get_current_cottage()
         if current_cottage:
-            context_tracker.set_current_cottage(current_cottage)
+            # Only set current_cottage if query should use it (prevents contamination)
+            if slot_manager.should_use_current_cottage(request.question, intent):
+                context_tracker.set_current_cottage(current_cottage)
+            else:
+                # Clear current_cottage for general info queries
+                logger.debug(f"Clearing current_cottage for general info query: {request.question[:50]}...")
+                context_tracker.set_current_cottage(None)
+                # Also clear cottage_id slot for general info queries
+                if intent in [IntentType.LOCATION, IntentType.FACILITIES, IntentType.FAQ_QUESTION]:
+                    if "cottage_id" in slot_manager.slots:
+                        slot_manager.slots["cottage_id"] = None
+                        logger.debug(f"Cleared cottage_id slot for {intent.value} intent (general info query)")
+        elif intent in [IntentType.LOCATION, IntentType.FACILITIES, IntentType.FAQ_QUESTION]:
+            # For general info queries, ensure cottage_id is cleared
+            if "cottage_id" in slot_manager.slots and slot_manager.slots["cottage_id"]:
+                logger.debug(f"Clearing cottage_id for {intent.value} intent (general info query)")
+                slot_manager.slots["cottage_id"] = None
         
         # If this is a slot response, use the previous intent instead of current classification
         if is_slot_response:
@@ -1864,7 +2526,24 @@ async def chat(
         # Note: Capacity queries can work with partial info, so we skip strict validation for them
         # Note: Pricing queries are handled by pricing_handler which can default guests to 6, so skip strict validation
         is_pricing_query_check = intent == IntentType.PRICING and get_pricing_handler().is_pricing_query(request.question)
-        if is_reasoning_query and not is_capacity_query and not is_pricing_query_check:
+        
+        # Check if this query needs slot extraction (specific calculation vs general info)
+        needs_slots = slot_manager.should_extract_slots(intent, request.question)
+        
+        # For booking/availability queries, provide general booking info first, then ask for details
+        # Skip slot checking for general booking queries (user asking "how to book" or "check availability")
+        query_lower_booking = request.question.lower()
+        is_general_booking_query = (
+            intent in [IntentType.BOOKING, IntentType.AVAILABILITY] and
+            any(phrase in query_lower_booking for phrase in [
+                "i want to check", "i want to book", "check availability", "book a cottage",
+                "how to book", "how can i book", "tell me about booking", "tell me about availability",
+                "want to check", "want to book", "check availability and book", "availability and book",
+                "for my dates"  # This is a general query asking about booking process
+            ])
+        )
+        
+        if is_reasoning_query and not is_capacity_query and not is_pricing_query_check and needs_slots and not is_general_booking_query:
             validation_result = slot_manager.validate_slots_for_intent(intent)
             
             if not validation_result["valid"]:
@@ -1892,7 +2571,7 @@ async def chat(
                             slot_questions = {
                                 "guests": "How many guests will be staying?",
                                 "dates": "What dates are you planning to visit?",
-                                "room_type": "Do you have a preference for which cottage?",
+                                "cottage_id": "Do you have a preference for which cottage?",
                                 "family": "Will this be for a family or friends group?",
                                 "season": "Are you planning to visit on weekdays or weekends?",
                             }
@@ -1902,7 +2581,7 @@ async def chat(
                         slot_questions = {
                             "guests": "How many guests will be staying?",
                             "dates": "What dates are you planning to visit?",
-                            "room_type": "Do you have a preference for which cottage?",
+                            "cottage_id": "Do you have a preference for which cottage?",
                             "family": "Will this be for a family or friends group?",
                             "season": "Are you planning to visit on weekdays or weekends?",
                         }
@@ -1970,22 +2649,26 @@ async def chat(
                         refined_question = refined_question.replace(" about it?", f" about cottage {current_cottage}?")
                     logger.info(f"Post-processed refined question with current_cottage {current_cottage}: {refined_question}")
             
-            # Query optimization for better RAG retrieval
-            if is_query_optimization_enabled():
-                try:
-                    optimized_query = optimize_query_for_rag(
-                        llm,
-                        refined_question,  # Use refined question as input
-                        max_new_tokens=max_new_tokens
-                    )
-                    logger.info(f"Query optimization: '{refined_question}' → '{optimized_query}'")
-                    search_query = optimized_query
-                except Exception as e:
-                    logger.warning(f"Query optimization failed: {e}, using refined query")
-                    search_query = refined_question
-            else:
-                search_query = refined_question
-                logger.debug("Query optimization disabled, using refined query")
+            # Intent-based query optimization and entity extraction
+            # Extract entities BEFORE retrieval for better filtering
+            entities = extract_entities_for_retrieval(refined_question)
+            logger.debug(f"Extracted entities: {entities}")
+            
+            # Optimize query based on intent (rule-based + optional LLM)
+            use_llm_optimization = is_query_optimization_enabled() and is_complex_query(refined_question)
+            search_query = optimize_query_for_retrieval(
+                refined_question,
+                intent,
+                entities,
+                use_llm=use_llm_optimization,
+                llm=llm if use_llm_optimization else None,
+                max_new_tokens=max_new_tokens
+            )
+            logger.info(f"Query optimization: '{refined_question}' → '{search_query}' (intent={intent.value}, use_llm={use_llm_optimization})")
+            
+            # Build metadata filter for intent-based retrieval
+            retrieval_filter = get_retrieval_filter(intent, entities)
+            logger.debug(f"Retrieval filter: {retrieval_filter}")
             
             # Determine effective k (exactly like Streamlit)
             # Streamlit shows 3 sources by default, so use k=3 to match
@@ -2035,7 +2718,10 @@ async def chat(
                 # Retrieve more documents than needed to ensure diversity
                 try:
                     result = vector_store.similarity_search_with_threshold(
-                        query=search_query, k=min(effective_k * 3, 15), threshold=0.0  # Get 3x more for deduplication
+                        query=search_query, 
+                        k=min(effective_k * 3, 15), 
+                        threshold=0.0,  # Get 3x more for deduplication
+                        filter=retrieval_filter if (is_intent_filtering_enabled() and retrieval_filter) else None  # Intent-based filtering (if enabled)
                     )
                 except TypeError as te:
                     # Catch the "object of type 'int' has no len()" error
@@ -2207,8 +2893,46 @@ async def chat(
                     )
             
             # Check if this is an availability query and enhance context
-            if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
-                logger.info("Detected availability query, enhancing context with availability information")
+            # CRITICAL: Only inject for ACTUAL booking/availability queries, not general facility questions
+            query_lower_avail_chat = request.question.lower()
+            
+            # Check for explicit booking/availability phrases (must be about booking, not just containing "available")
+            explicit_booking_phrases_chat = [
+                "i want to check availability", "i want to book", "check availability and book",
+                "book a cottage", "want to book", "want to check availability", 
+                "can i book", "how to book", "how can i book", "book now",
+                "check availability", "availability and book", "book", "reserve", "reservation"
+            ]
+            has_explicit_booking_phrase_chat = any(phrase in query_lower_avail_chat for phrase in explicit_booking_phrases_chat)
+            
+            # EXCLUDE queries that are clearly NOT about booking (even if they contain "available")
+            is_facilities_query_chat = any(phrase in query_lower_avail_chat for phrase in [
+                "what facilities", "facilities available", "facilities are", "tell me about facilities",
+                "what amenities", "amenities available", "what features", "features available"
+            ])
+            is_general_info_query_chat = any(phrase in query_lower_avail_chat for phrase in [
+                "tell me about", "what is", "what are", "describe", "information about"
+            ]) and not has_explicit_booking_phrase_chat
+            
+            # Check intent - must be explicitly BOOKING or AVAILABILITY
+            is_booking_availability_intent_chat = intent in [IntentType.BOOKING, IntentType.AVAILABILITY]
+            
+            # Only inject if:
+            # 1. It's explicitly about booking/availability (has booking phrase AND intent)
+            # 2. OR intent is booking/availability AND query explicitly mentions booking (not just "available")
+            # 3. AND it's NOT a facilities/general info query
+            is_availability_booking_chat = (
+                not is_facilities_query_chat and 
+                not (is_general_info_query_chat and not has_explicit_booking_phrase_chat) and
+                (
+                    (is_booking_availability_intent_chat and has_explicit_booking_phrase_chat) or
+                    (is_booking_availability_intent_chat and any(word in query_lower_avail_chat for word in ["book", "booking", "reserve", "reservation"])) or
+                    has_explicit_booking_phrase_chat
+                )
+            )
+            
+            if is_availability_booking_chat:
+                logger.info(f"Detected availability query, enhancing context with availability information (intent={intent}, query='{request.question[:80]}')")
                 # Extract cottage number if mentioned
                 cottage_num = None
                 query_lower = request.question.lower()
@@ -2309,13 +3033,40 @@ CONTACT INFORMATION:
             # Check if this is a pricing query and process it with structured logic
             # Process pricing queries BEFORE validation - pricing_handler can handle missing slots gracefully
             # Check pricing query by handler (not just intent) - some pricing queries might be classified as ROOMS intent
+            # Also check if query contains dates - if previous query was about pricing and current query has dates, treat as pricing
             pricing_handler = get_pricing_handler()
             pricing_result = None
-            if pricing_handler.is_pricing_query(request.question):
+            
+            # Check if this is a pricing query OR a date query following a pricing query
+            is_pricing_query = pricing_handler.is_pricing_query(request.question)
+            
+            # Also check if query has dates/cottage and previous intent was pricing (follow-up with info)
+            slots = slot_manager.get_slots()
+            has_dates = slots.get("dates") is not None
+            has_cottage = slots.get("cottage_id") is not None
+            has_nights = slots.get("nights") is not None
+            previous_intent_was_pricing = (len(context_tracker.intent_history) > 1 and 
+                                          context_tracker.intent_history[-2] == IntentType.PRICING)
+            
+            # If query has dates/cottage/nights and previous intent was pricing, treat as pricing query
+            # This handles cases like "in cottage 9" or "tell me the total cost" after providing dates
+            if not is_pricing_query and previous_intent_was_pricing and (has_dates or has_cottage or has_nights):
+                logger.info(f"Detected follow-up query with slots (dates={has_dates}, cottage={has_cottage}, nights={has_nights}) following pricing query - treating as pricing query")
+                is_pricing_query = True
+            
+            # Also check if query is asking for total cost and we have slots from previous messages
+            if not is_pricing_query and any(phrase in request.question.lower() for phrase in ["tell me the total cost", "tell me total cost", "what is the total cost", "what's the total cost", "total cost"]):
+                if has_dates or has_nights:
+                    logger.info(f"Detected 'total cost' query with slots (dates={has_dates}, nights={has_nights}) - treating as pricing query")
+                    is_pricing_query = True
+            
+            if is_pricing_query:
                 logger.info("Detected pricing query, processing with structured logic")
-                slots = slot_manager.get_slots()
                 # Use refined_question if available (includes cottage number from context), otherwise use original
                 question_for_pricing = refined_question if 'refined_question' in locals() and refined_question else request.question
+                
+                # For pricing queries, ensure we have pricing documents in retrieved_contents
+                # If no pricing documents found, the handler will fallback to loading from FAQ files
                 pricing_result = pricing_handler.process_pricing_query(
                     question_for_pricing, slots, retrieved_contents
                 )
@@ -2467,24 +3218,24 @@ CONTACT INFORMATION:
                 
                 # Generate answer with context (same as Streamlit)
                 # Optimize max_new_tokens based on query complexity
-                base_max_tokens = request.max_new_tokens or 512
+                base_max_tokens = request.max_new_tokens or 1024  # Increased default to prevent cut-off responses
                 query_lower_for_tokens = request.question.lower()
                 
-                # Reduce tokens for simple queries (faster responses)
-                if any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]):
-                    max_new_tokens = min(base_max_tokens, 64)  # Very short for greetings/acknowledgments
-                # "Tell me about cottage X" - limit to prevent overly long responses
-                elif "tell me about" in query_lower_for_tokens and any(cottage in query_lower_for_tokens for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
-                    max_new_tokens = min(base_max_tokens, 256)  # Limit for specific cottage questions
+                # Reduce tokens ONLY for very simple greetings/acknowledgments
+                if any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]) and len(request.question.split()) <= 3:
+                    max_new_tokens = min(base_max_tokens, 128)  # Short for very simple greetings only
+                # Availability/booking queries need more tokens for complete responses
+                elif any(word in query_lower_for_tokens for word in ["pricing", "price", "cost", "booking", "availability", "book a cottage", "check availability", "i want to check", "i want to book", "book", "available", "reserve", "reservation"]):
+                    max_new_tokens = max(base_max_tokens, 1024)  # Ensure enough tokens for complete booking/availability responses
                 # "Tell me more" follow-ups - need more tokens to complete properly
                 elif any(phrase in query_lower_for_tokens for phrase in ["tell me more", "tell me more about", "more about", "more details", "more information"]):
-                    max_new_tokens = min(base_max_tokens, 512)  # Ensure enough tokens for follow-ups
-                elif len(request.question.split()) < 5:
-                    max_new_tokens = min(base_max_tokens, 256)  # Short for brief questions
-                elif any(word in query_lower_for_tokens for word in ["pricing", "price", "cost", "booking", "availability"]):
-                    max_new_tokens = base_max_tokens  # Full tokens for important queries
+                    max_new_tokens = max(base_max_tokens, 1024)  # Ensure enough tokens for follow-ups
+                # Very short questions (1-2 words) can use fewer tokens
+                elif len(request.question.split()) <= 2:
+                    max_new_tokens = min(base_max_tokens, 512)  # Short for very brief questions only
                 else:
-                    max_new_tokens = min(base_max_tokens, 512)  # Default for other queries
+                    # Default: Use full base_max_tokens to ensure complete responses
+                    max_new_tokens = base_max_tokens  # Use full amount to prevent cut-off responses
                 
                 logger.debug(f"Query complexity adjustment: base={base_max_tokens}, adjusted={max_new_tokens}")
                 
@@ -2497,8 +3248,8 @@ CONTACT INFORMATION:
                         slot_info_parts.append(f"for {slots['nights']} nights")
                     if slots.get("guests"):
                         slot_info_parts.append(f"for {slots['guests']} guests")
-                    if slots.get("room_type"):
-                        slot_info_parts.append(f"in {slots['room_type']}")
+                    if slots.get("cottage_id"):
+                        slot_info_parts.append(f"in {slots['cottage_id']}")
                     if slot_info_parts:
                         # Append slot info to question to make it explicit for LLM
                         enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
@@ -2533,6 +3284,7 @@ CONTACT INFORMATION:
                         retrieved_contents,
                         max_new_tokens,
                         use_simple_prompt=use_simple_prompt,
+                        intent=intent_type if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                     )
                 except Exception as e:
                     error_msg = str(e)
@@ -2553,6 +3305,7 @@ CONTACT INFORMATION:
                                 retrieved_contents,
                                 max_new_tokens,
                                 use_simple_prompt=False,
+                                intent=intent_type if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                             )
                             logger.info("Fallback to reasoning model succeeded")
                         else:
@@ -2602,6 +3355,10 @@ CONTACT INFORMATION:
                     )
                     if answer_text == "":
                         answer_text = "I didn't provide the answer; perhaps I can try again."
+                
+                # CRITICAL: Remove structured pricing template IMMEDIATELY after LLM response
+                # This must happen BEFORE clean_answer_text to catch it early
+                answer_text = remove_pricing_template_aggressively(answer_text)
                 
                 # Clean answer text to remove LLM reasoning/process text
                 answer_text = clean_answer_text(answer_text)
@@ -2792,6 +3549,7 @@ CONTACT INFORMATION:
                                     first_doc_only,
                                     max_new_tokens,
                                     use_simple_prompt=use_simple_prompt,
+                                    intent=intent_type if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                                 )
                                 answer_text = ""
                                 for token in streamer:
@@ -2884,39 +3642,45 @@ CONTACT INFORMATION:
                     logger.info("User responding affirmatively to recommendation, suppressing follow-up question")
                     missing_slot = None
                 elif intent in [IntentType.BOOKING, IntentType.PRICING, IntentType.AVAILABILITY]:
-                    # Only ask for slots for booking/pricing/availability intents
-                    try:
-                        missing_slot = slot_manager.get_most_important_missing_slot(intent)
-                        # Check if this slot was just extracted in the current turn
-                        if missing_slot and missing_slot in extracted_slots:
-                            # Slot was just provided, don't ask for it again
-                            logger.info(f"Slot '{missing_slot}' was just extracted, skipping follow-up question")
-                            missing_slot = None
-                        # Special check: Don't ask about room_type if cottage is mentioned in query or chat history
-                        elif missing_slot == "room_type":
-                            # Check if cottage was mentioned in the current query
-                            from bot.conversation.number_extractor import ExtractCottageNumber
-                            cottage_extractor = ExtractCottageNumber()
-                            cottage_mentioned = cottage_extractor.extract_cottage_number(request.question)
-                            
-                            # Also check chat history for cottage mentions
-                            if not cottage_mentioned and chat_history:
-                                for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
-                                    if isinstance(message, str):
-                                        # Extract question from chat history format
-                                        if "question:" in message:
-                                            prev_query = message.split("question:")[1].split("answer:")[0].strip()
-                                            if prev_query:
-                                                cottage_mentioned = cottage_extractor.extract_cottage_number(prev_query)
-                                                if cottage_mentioned:
-                                                    logger.info(f"Cottage {cottage_mentioned} mentioned in chat history, skipping room_type question")
-                                                    break
-                            
-                            if cottage_mentioned:
-                                logger.info(f"Cottage {cottage_mentioned} mentioned in query or history, skipping room_type question")
+                    # Only ask for slots if query needs them (specific calculation vs general info)
+                    needs_slots = slot_manager.should_extract_slots(intent, request.question)
+                    if not needs_slots:
+                        logger.info(f"Query is general info, skipping slot extraction for {intent.value}")
+                        missing_slot = None
+                    else:
+                        # Only ask for slots for booking/pricing/availability intents that need calculation
+                        try:
+                            missing_slot = slot_manager.get_most_important_missing_slot(intent)
+                            # Check if this slot was just extracted in the current turn
+                            if missing_slot and missing_slot in extracted_slots:
+                                # Slot was just provided, don't ask for it again
+                                logger.info(f"Slot '{missing_slot}' was just extracted, skipping follow-up question")
                                 missing_slot = None
-                    except Exception as e:
-                        logger.warning(f"Error getting missing slot: {e}")
+                            # Special check: Don't ask about cottage_id if cottage is mentioned in query or chat history
+                            elif missing_slot == "cottage_id":
+                                # Check if cottage was mentioned in the current query
+                                from bot.conversation.number_extractor import ExtractCottageNumber
+                                cottage_extractor = ExtractCottageNumber()
+                                cottage_mentioned = cottage_extractor.extract_cottage_number(request.question)
+                                
+                                # Also check chat history for cottage mentions
+                                if not cottage_mentioned and chat_history:
+                                    for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
+                                        if isinstance(message, str):
+                                            # Extract question from chat history format
+                                            if "question:" in message:
+                                                prev_query = message.split("question:")[1].split("answer:")[0].strip()
+                                                if prev_query:
+                                                    cottage_mentioned = cottage_extractor.extract_cottage_number(prev_query)
+                                                    if cottage_mentioned:
+                                                        logger.info(f"Cottage {cottage_mentioned} mentioned in chat history, skipping cottage_id question")
+                                                        break
+                                
+                                if cottage_mentioned:
+                                    logger.info(f"Cottage {cottage_mentioned} mentioned in query or history, skipping cottage_id question")
+                                    missing_slot = None
+                        except Exception as e:
+                            logger.warning(f"Error getting missing slot: {e}")
                 
                 if missing_slot:
                     # Generate follow-up question using LLM or template
@@ -2935,15 +3699,19 @@ CONTACT INFORMATION:
                         slot_questions = {
                             "guests": "How many guests will be staying?",
                             "dates": "What dates are you planning to visit?",
-                            "room_type": "Do you have a preference for which cottage?",
+                            "cottage_id": "Do you have a preference for which cottage?",
                             "family": "Will this be for a family or friends group?",
                             "season": "Are you planning to visit on weekdays or weekends?",
                         }
                         if missing_slot in slot_questions:
                             response_parts.append(f"\n\n{slot_questions[missing_slot]}")
                 
+                # Get max sentences for this intent
+                max_sentences = get_max_sentences_for_intent(intent)
+                current_sentence_count = count_sentences(answer_text)
+                
                 # Add gentle recommendations for pricing, rooms, or safety intents
-                # Only show recommendations when they add value (not on every response)
+                # Only show recommendations when they add value AND within length limits
                 recommendation_engine = get_recommendation_engine()
                 # Only show recommendations for specific intents and when user has provided relevant info
                 if intent in [IntentType.PRICING, IntentType.ROOMS, IntentType.SAFETY]:
@@ -2953,7 +3721,7 @@ CONTACT INFORMATION:
                     # For pricing: show if user asked about pricing
                     # For safety: show if user asked about safety
                     should_show_recommendation = False
-                    if intent == IntentType.ROOMS and (slots.get("guests") or slots.get("room_type") or "cottage" in query_lower):
+                    if intent == IntentType.ROOMS and (slots.get("guests") or slots.get("cottage_id") or "cottage" in query_lower):
                         should_show_recommendation = True
                     elif intent == IntentType.PRICING and (slots.get("guests") or slots.get("dates") or "price" in query_lower or "pricing" in query_lower or "cost" in query_lower):
                         should_show_recommendation = True
@@ -2965,7 +3733,13 @@ CONTACT INFORMATION:
                             intent, slots, context_tracker
                         )
                         if recommendation:
-                            response_parts.append(f"\n\n{recommendation}")
+                            # Check if adding recommendation would exceed length limit
+                            rec_sentence_count = count_sentences(recommendation)
+                            if current_sentence_count + rec_sentence_count <= max_sentences:
+                                response_parts.append(f"\n\n{recommendation}")
+                                current_sentence_count += rec_sentence_count
+                            else:
+                                logger.debug(f"Skipping recommendation - would exceed max {max_sentences} sentences (current: {current_sentence_count}, recommendation: {rec_sentence_count})")
                 
                 # Add cross-recommendations for facilities/services
                 # Show related services after answering facility-related questions
@@ -2986,16 +3760,27 @@ CONTACT INFORMATION:
                         intent
                     )
                     if cross_rec:
-                        response_parts.append(f"\n\n{cross_rec}")
+                        # Check if adding cross recommendation would exceed length limit
+                        rec_sentence_count = count_sentences(cross_rec)
+                        if current_sentence_count + rec_sentence_count <= max_sentences:
+                            response_parts.append(f"\n\n{cross_rec}")
+                            current_sentence_count += rec_sentence_count
+                        else:
+                            logger.debug(f"Skipping cross recommendation - would exceed max {max_sentences} sentences")
                 
-                # Add proactive image offer for cottage-specific queries
+                # Add proactive image offer for cottage-specific queries (only if within length limits)
                 should_offer, cottage_num = should_offer_images(request.question, answer_text)
                 if should_offer and cottage_num and not is_image_request:
                     image_offer = f"\n\n📷 **Would you like to see images of Cottage {cottage_num}?** Just say 'yes' or 'show images'."
-                    response_parts.append(image_offer)
-                    # Store in session for "yes" handling
-                    session_manager.set_session_data(request.session_id, "image_offer_cottage", cottage_num)
-                    logger.info(f"Added image offer for Cottage {cottage_num}")
+                    offer_sentence_count = count_sentences(image_offer)
+                    if current_sentence_count + offer_sentence_count <= max_sentences:
+                        response_parts.append(image_offer)
+                        current_sentence_count += offer_sentence_count
+                        # Store in session for "yes" handling
+                        session_manager.set_session_data(request.session_id, "image_offer_cottage", cottage_num)
+                        logger.info(f"Added image offer for Cottage {cottage_num}")
+                    else:
+                        logger.debug(f"Skipping image offer - would exceed max {max_sentences} sentences")
                 
                 # Add image recommendation when cottage is mentioned (but not if user already asked for images)
                 if not is_image_request and not should_offer:  # Only suggest if user hasn't already asked for images
@@ -3005,21 +3790,43 @@ CONTACT INFORMATION:
                         intent
                     )
                     if image_rec:
-                        response_parts.append(f"\n\n{image_rec}")
+                        rec_sentence_count = count_sentences(image_rec)
+                        if current_sentence_count + rec_sentence_count <= max_sentences:
+                            response_parts.append(f"\n\n{image_rec}")
+                            current_sentence_count += rec_sentence_count
+                        else:
+                            logger.debug(f"Skipping image recommendation - would exceed max {max_sentences} sentences")
                 
-                # Add booking nudge if enough info available AND user seems ready
-                # Only show when user has asked about booking/availability
-                if slot_manager.has_enough_booking_info():
+                # Add booking nudge ONLY for booking/availability intents AND if enough info available AND within length limits
+                if intent in [IntentType.BOOKING, IntentType.AVAILABILITY] and slot_manager.has_enough_booking_info():
                     nudge = recommendation_engine.generate_booking_nudge(
                         slot_manager.get_slots(), 
                         context_tracker,
                         intent
                     )
                     if nudge:
-                        response_parts.append(f"\n\n{nudge}")
+                        nudge_sentence_count = count_sentences(nudge)
+                        if current_sentence_count + nudge_sentence_count <= max_sentences:
+                            response_parts.append(f"\n\n{nudge}")
+                            current_sentence_count += nudge_sentence_count
+                        else:
+                            logger.debug(f"Skipping booking nudge - would exceed max {max_sentences} sentences")
                 
                 # Combine all response parts
                 answer_text = "".join(response_parts)
+                
+                # CRITICAL: Remove structured pricing template if LLM output it directly
+                # This must happen BEFORE any other processing
+                answer_text = remove_pricing_template_aggressively(answer_text)
+                
+                # Clean answer text (removes reasoning, templates, etc.)
+                answer_text = clean_answer_text(answer_text)
+                
+                # Final length enforcement - truncate if still exceeds limit
+                final_sentence_count = count_sentences(answer_text)
+                if final_sentence_count > max_sentences:
+                    logger.warning(f"Response exceeds max {max_sentences} sentences ({final_sentence_count}). Truncating.")
+                    answer_text = truncate_to_max_sentences(answer_text, max_sentences)
                 
                 # Adjust tone based on sentiment
                 answer_text = sentiment_analyzer.adjust_tone(answer_text, sentiment)
@@ -3036,6 +3843,10 @@ CONTACT INFORMATION:
                 # Get cottage images if requested
                 cottage_image_urls = None
                 if is_image_request and cottage_numbers:
+                    # Detect if user is asking for a specific image type
+                    image_type = detect_image_type_request(request.question)
+                    logger.info(f"Detected image type request in stream: {image_type}")
+                    
                     # First, try to get Dropbox URLs
                     dropbox_config = get_dropbox_config()
                     use_dropbox = dropbox_config.get("use_dropbox", False)
@@ -3043,7 +3854,7 @@ CONTACT INFORMATION:
                     all_images = []
                     
                     if use_dropbox:
-                        # Use Dropbox URLs
+                        # Use Dropbox URLs (Note: Dropbox URLs don't support type filtering yet)
                         logger.info("Using Dropbox image URLs")
                         for cottage_num in cottage_numbers:
                             dropbox_urls = get_dropbox_image_urls(cottage_num, max_images=6)
@@ -3052,9 +3863,9 @@ CONTACT INFORMATION:
                                 logger.info(f"Found {len(dropbox_urls)} Dropbox image URLs for cottage {cottage_num}")
                             else:
                                 logger.warning(f"No Dropbox URLs found for cottage {cottage_num}, falling back to local files")
-                                # Fallback to local files
+                                # Fallback to local files with type filtering
                                 root_folder = get_root_folder()
-                                images = get_cottage_images(cottage_num, root_folder, max_images=6)
+                                images = get_cottage_images_by_type(cottage_num, root_folder, image_type=image_type, max_images=6)
                                 for img_path in images:
                                     rel_path = img_path.relative_to(root_folder)
                                     from urllib.parse import quote
@@ -3063,12 +3874,12 @@ CONTACT INFORMATION:
                                     image_url = f"/images/{url_path}"
                                     all_images.append(image_url)
                     else:
-                        # Use local file paths
+                        # Use local file paths with type filtering
                         root_folder = get_root_folder()
                         logger.info("Using local file paths for images")
                         for cottage_num in cottage_numbers:
-                            images = get_cottage_images(cottage_num, root_folder, max_images=6)
-                            logger.info(f"Found {len(images)} local images for cottage {cottage_num}")
+                            images = get_cottage_images_by_type(cottage_num, root_folder, image_type=image_type, max_images=6)
+                            logger.info(f"Found {len(images)} local images for cottage {cottage_num} (type: {image_type})")
                             for img_path in images:
                                 rel_path = img_path.relative_to(root_folder)
                                 from urllib.parse import quote
@@ -3080,12 +3891,24 @@ CONTACT INFORMATION:
                     
                     cottage_image_urls = all_images[:6]  # Limit total images
                     logger.info(f"Returning {len(cottage_image_urls)} image URLs")
+                    
+                    # If no images found for specific type, modify answer
+                    if not cottage_image_urls and image_type:
+                        answer_text = (
+                            f"I'm sorry, I don't have {image_type} images available for the requested cottage at the moment.\n\n"
+                            f"You can ask for general images to see what's available."
+                        )
                 
                 # Generate follow-up actions
+                # Convert chat_history to list format for recommendations
+                chat_history_list = list(chat_history) if chat_history else []
                 follow_up_actions = generate_follow_up_actions(
                     intent,
                     slot_manager.get_slots(),
                     request.question,
+                    context_tracker=context_tracker,
+                    chat_history=chat_history_list,
+                    llm_client=llm,
                     is_widget_query=is_widget_query
                 )
                 
@@ -3098,19 +3921,36 @@ CONTACT INFORMATION:
                     follow_up_actions=follow_up_actions,
                 )
             else:
-                # No documents found
-                answer = (
-                    "I couldn't find specific information about that in our knowledge base.\n\n"
-                    "💡 **Please try:**\n"
-                    "- Rephrasing your question (e.g., 'What is Swiss Cottages Bhurban?')\n"
-                    "- Using different keywords\n"
-                    "- Being more specific about Swiss Cottages Bhurban\n\n"
-                    "**Note:** I only answer questions based on the provided FAQ documents. "
-                    "I cannot answer questions from general knowledge.\n"
-                )
-                return ChatResponse(
-                    answer=answer,
-                    sources=[],
+                # No documents found - but check if we have pricing/capacity results
+                # Pricing and capacity handlers can work without retrieved documents
+                if pricing_result and pricing_result.get("answer_template"):
+                    # Pricing handler has generated content, use it
+                    logger.info("No documents retrieved but pricing_result exists - will use pricing template")
+                    # Continue to answer generation (pricing template is in retrieved_contents via enhance_context_with_pricing_info)
+                    retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                        retrieved_contents if retrieved_contents else [], pricing_result
+                    )
+                elif capacity_result and capacity_result.get("answer_template"):
+                    # Capacity handler has generated content, use it
+                    logger.info("No documents retrieved but capacity_result exists - will use capacity template")
+                    retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                        retrieved_contents if retrieved_contents else [], capacity_result
+                    )
+                
+                # Only show error if we still have no content after checking handlers
+                if not retrieved_contents:
+                    answer = (
+                        "I couldn't find specific information about that in our knowledge base.\n\n"
+                        "💡 **Please try:**\n"
+                        "- Rephrasing your question (e.g., 'What is Swiss Cottages Bhurban?')\n"
+                        "- Using different keywords\n"
+                        "- Being more specific about Swiss Cottages Bhurban\n\n"
+                        "**Note:** I only answer questions based on the provided FAQ documents. "
+                        "I cannot answer questions from general knowledge.\n"
+                    )
+                    return ChatResponse(
+                        answer=answer,
+                        sources=[],
                     intent=intent_type,
                     session_id=request.session_id,
                 )
@@ -3298,8 +4138,26 @@ async def chat_stream(
                 yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
                 return
             
+            # Check for capacity queries BEFORE cottage listing handler
+            # IMPORTANT: Capacity queries should NOT trigger static cottage listing - they need LLM reasoning
+            capacity_handler = get_capacity_handler()
+            is_capacity_query = capacity_handler.is_capacity_query(request.question)
+            
             # Flexible cottage listing detection using keyword combination
             # Check if query contains "cottages" + listing keywords
+            # IMPORTANT: Exclude pricing queries, capacity queries, AND facilities queries - they should NOT trigger cottage listing
+            is_pricing_query = any(phrase in query_lower for phrase in [
+                "pricing", "price", "prices", "cost", "rate", "rates", "how much"
+            ])
+            
+            # Check if this is a facilities query - these should go to RAG, not static listing
+            is_facilities_query = any(phrase in query_lower for phrase in [
+                "facility", "facilities", "amenity", "amenities", "feature", "features",
+                "kitchen", "terrace", "balcony", "socializing", "relaxation", "what is available",
+                "chef", "service", "services", "cooking", "food", "meal", "bbq", "grill",
+                "wifi", "internet", "tv", "netflix", "parking", "heating", "lounge", "bbq facilities"
+            ])
+            
             has_cottages_keyword = "cottage" in query_lower or "cottages" in query_lower
             listing_keywords = [
                 "you have", "do you have", "available", "offer", "list", 
@@ -3317,7 +4175,8 @@ async def chat_stream(
             has_explicit_pattern = any(pattern in query_lower for pattern in explicit_listing_patterns)
             
             # If query is about listing cottages (not general info about swiss cottages)
-            if has_cottages_keyword and (has_listing_intent or has_explicit_pattern):
+            # AND it's NOT a pricing query AND it's NOT a capacity query AND it's NOT a facilities query
+            if has_cottages_keyword and (has_listing_intent or has_explicit_pattern) and not is_pricing_query and not is_capacity_query and not is_facilities_query:
                 # Additional check: exclude general "tell me about swiss cottages" or "tell me about the cottages" queries
                 # These should go to RAG for general information
                 is_general_info_query = (
@@ -3499,11 +4358,20 @@ async def chat_stream(
             
             # Improve context retention: Check chat history for previous slot values
             if chat_history and len(chat_history) > 0:
+                date_extractor = get_date_extractor()
                 for message in reversed(list(chat_history)[-3:]):  # Check last 3 messages
                     if isinstance(message, str) and "question:" in message:
                         parts = message.split("question:", 1)
                         if len(parts) > 1:
-                            prev_query = parts[1].split("answer:")[0].strip()
+                            full_message = parts[1]
+                            # Split into question and answer
+                            if "answer:" in full_message:
+                                prev_query = full_message.split("answer:")[0].strip()
+                                prev_answer = full_message.split("answer:")[1].strip() if "answer:" in full_message else ""
+                            else:
+                                prev_query = full_message.strip()
+                                prev_answer = ""
+                            
                             if prev_query and prev_query != request.question:
                                 prev_slots = slot_manager.extract_slots(prev_query, intent)
                                 for key, value in prev_slots.items():
@@ -3511,6 +4379,16 @@ async def chat_stream(
                                         if key not in slot_manager.slots or slot_manager.slots[key] is None:
                                             extracted_slots[key] = value
                                             logger.info(f"Retrieved {key}={value} from chat history in stream endpoint")
+                            
+                            # CRITICAL: Also extract dates from previous ANSWERS (bot responses)
+                            # This handles cases where bot mentioned dates like "February 11, 2026, to February 15, 2026"
+                            if prev_answer and "dates" not in extracted_slots:
+                                # Try to extract dates from the answer text
+                                date_range = date_extractor.extract_date_range(prev_answer)
+                                if date_range:
+                                    extracted_slots["dates"] = date_range
+                                    logger.info(f"✅ Extracted dates from chat history answer in stream: {date_range.get('start_date')} to {date_range.get('end_date')}, {date_range.get('nights')} nights")
+                                    logger.info(f"   Source text: '{prev_answer[:100]}...'")
             
             slot_manager.update_slots(extracted_slots)
             
@@ -3576,20 +4454,33 @@ async def chat_stream(
                         refined_question = refined_question.replace(" about it?", f" about cottage {current_cottage}?")
                     logger.info(f"Post-processed refined question with current_cottage {current_cottage}: {refined_question}")
             
-            # Query optimization
-            if is_query_optimization_enabled():
-                try:
-                    optimized_query = optimize_query_for_rag(
-                        selected_llm,
-                        refined_question,
-                        max_new_tokens=max_new_tokens
-                    )
-                    search_query = optimized_query
-                except Exception as e:
-                    logger.warning(f"Query optimization failed: {e}, using refined query")
-                    search_query = refined_question
+            # Intent-based query optimization and entity extraction (if enabled)
+            if is_intent_filtering_enabled():
+                # Extract entities BEFORE retrieval for better filtering
+                entities = extract_entities_for_retrieval(refined_question)
+                logger.debug(f"Extracted entities: {entities}")
+                
+                # Optimize query based on intent (rule-based + optional LLM)
+                use_llm_optimization = is_query_optimization_enabled() and is_complex_query(refined_question)
+                search_query = optimize_query_for_retrieval(
+                    refined_question,
+                    intent,
+                    entities,
+                    use_llm=use_llm_optimization,
+                    llm=selected_llm if use_llm_optimization else None,
+                    max_new_tokens=max_new_tokens
+                )
+                logger.info(f"Query optimization: '{refined_question}' → '{search_query}' (intent={intent.value}, use_llm={use_llm_optimization})")
+                
+                # Build metadata filter for intent-based retrieval
+                retrieval_filter = get_retrieval_filter(intent, entities)
+                logger.debug(f"Retrieval filter: {retrieval_filter}")
             else:
+                # Fallback to old behavior (no intent-based filtering)
+                entities = {}
                 search_query = refined_question
+                retrieval_filter = None
+                logger.debug("Intent-based filtering disabled, using original query")
             
             # Determine effective k
             effective_k = request.k or 3
@@ -3610,15 +4501,29 @@ async def chat_stream(
             if any(word in query_lower for word in ["member", "members", "people", "person", "persons", "guest", "guests", "group", "suitable", "best for", "accommodate", "capacity"]):
                 effective_k = max(effective_k, 5)
             
-            # Initialize pricing and capacity handlers (will process AFTER retrieval)
+            # Initialize pricing handler (will process AFTER retrieval)
             pricing_handler = get_pricing_handler()
             pricing_result = None
             # Check pricing query by handler (not just intent) - some pricing queries might not be classified as PRICING intent
+            # Also check if query contains dates - if previous query was about pricing and current query has dates, treat as pricing
             is_pricing_query = pricing_handler.is_pricing_query(request.question)
             
-            capacity_handler = get_capacity_handler()
+            # Also check if query has dates and previous intent was pricing (follow-up with dates)
+            slots = slot_manager.get_slots()
+            has_dates = slots.get("dates") is not None
+            previous_intent_was_pricing = (len(context_tracker.intent_history) > 1 and 
+                                          context_tracker.intent_history[-2] == IntentType.PRICING)
+            
+            # If query has dates and previous intent was pricing, treat as pricing query
+            if not is_pricing_query and has_dates and previous_intent_was_pricing:
+                logger.info(f"Detected date query following pricing query in stream - treating as pricing query")
+                is_pricing_query = True
+            
+            # capacity_handler and is_capacity_query are already initialized earlier (for cottage listing check)
+            # Reuse them here - get_capacity_handler() returns singleton, so safe to call again
+            capacity_handler = get_capacity_handler()  # Reuse singleton instance
             capacity_result = None
-            is_capacity_query = capacity_handler.is_capacity_query(request.question)
+            # is_capacity_query is already set earlier, no need to check again
             
             # Send searching status (only if we're going to search)
             yield f"data: {json.dumps({'type': 'searching', 'message': 'Searching knowledge base...'})}\n\n"
@@ -3638,7 +4543,10 @@ async def chat_stream(
                     logger.info(f"Increased k to {effective_k} for general query")
                 
                 result = vector_store.similarity_search_with_threshold(
-                    query=search_query, k=min(effective_k * 3, 20), threshold=0.0
+                    query=search_query, 
+                    k=min(effective_k * 3, 20), 
+                    threshold=0.0,
+                    filter=retrieval_filter if (is_intent_filtering_enabled() and retrieval_filter) else None  # Intent-based filtering (if enabled)
                 )
                 
                 # Validate result
@@ -3682,25 +4590,14 @@ async def chat_stream(
                         question_for_pricing, slots, retrieved_contents
                     )
                     if pricing_result and pricing_result.get("answer_template"):
-                        # If pricing has all info, return early with structured answer
-                        if pricing_result.get("has_all_info"):
-                            logger.info("Pricing query has all info, returning structured answer")
-                            answer = pricing_result["answer_template"]
-                            # Format sources
-                            pricing_sources = []
-                            if sources:
-                                for src in sources[:effective_k]:
-                                    if isinstance(src, dict):
-                                        pricing_sources.append(src)
-                            yield f"data: {json.dumps({'type': 'token', 'chunk': answer})}\n\n"
-                            yield f"data: {json.dumps({'type': 'done', 'sources': pricing_sources})}\n\n"
-                            return
-                        # Enhance context with pricing info
+                        # CRITICAL: DO NOT return template directly - it must go through LLM to convert to natural language
+                        # Enhance context with pricing info (template goes to LLM as context, not as direct answer)
                         retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
                             retrieved_contents, pricing_result
                         )
-                        # Keep only the first document (pricing doc)
+                        # Keep only the first document (pricing doc) for focused context
                         retrieved_contents = retrieved_contents[:1]
+                        logger.info("Enhanced context with pricing template - LLM will convert to natural language")
                 
                 # Process capacity query AFTER retrieval (needs documents)
                 if is_capacity_query:
@@ -3715,9 +4612,50 @@ async def chat_stream(
                         )
                         logger.info(f"Enhanced context with capacity analysis: suitable={capacity_result.get('suitable')}, has_all_info={capacity_result.get('has_all_info')}")
                 
-                # Check if this is an availability query and enhance context
-                if intent == IntentType.AVAILABILITY or any(word in request.question.lower() for word in ["available", "availability", "can i book", "can we stay", "we want to stay", "we were stay"]):
-                    logger.info("Detected availability query in stream, enhancing context with availability information")
+                # Check if this is an availability/booking query and enhance context
+                # CRITICAL: Only inject for ACTUAL booking/availability queries, not general facility questions
+                query_lower_avail = request.question.lower()
+                
+                # Check for explicit booking/availability phrases (must be about booking, not just containing "available")
+                # These phrases explicitly indicate the user wants to book or check availability for booking
+                explicit_booking_phrases = [
+                    "i want to check availability", "i want to book", "check availability and book",
+                    "book a cottage", "want to book", "want to check availability", 
+                    "can i book", "how to book", "how can i book", "book now",
+                    "check availability", "availability and book", "book", "reserve", "reservation"
+                ]
+                has_explicit_booking_phrase = any(phrase in query_lower_avail for phrase in explicit_booking_phrases)
+                
+                # EXCLUDE queries that are clearly NOT about booking (even if they contain "available")
+                is_facilities_query = any(phrase in query_lower_avail for phrase in [
+                    "what facilities", "facilities available", "facilities are", "tell me about facilities",
+                    "what amenities", "amenities available", "what features", "features available"
+                ])
+                is_general_info_query = any(phrase in query_lower_avail for phrase in [
+                    "tell me about", "what is", "what are", "describe", "information about"
+                ]) and not has_explicit_booking_phrase
+                
+                # Check intent - must be explicitly BOOKING or AVAILABILITY
+                is_booking_availability_intent = intent in [IntentType.BOOKING, IntentType.AVAILABILITY]
+                
+                # Only inject if:
+                # 1. It's explicitly about booking/availability (has booking phrase AND intent)
+                # 2. OR intent is booking/availability AND query explicitly mentions booking (not just "available")
+                # 3. AND it's NOT a facilities/general info query
+                is_availability_booking = (
+                    not is_facilities_query and 
+                    not (is_general_info_query and not has_explicit_booking_phrase) and
+                    (
+                        (is_booking_availability_intent and has_explicit_booking_phrase) or
+                        (is_booking_availability_intent and any(word in query_lower_avail for word in ["book", "booking", "reserve", "reservation"])) or
+                        has_explicit_booking_phrase
+                    )
+                )
+                
+                logger.info(f"🔍 Availability injection check: intent={intent}, has_phrase={has_explicit_booking_phrase}, is_facilities={is_facilities_query}, is_general={is_general_info_query}, is_booking_intent={is_booking_availability_intent}, will_inject={is_availability_booking}, query='{request.question[:80]}'")
+                
+                if is_availability_booking:
+                    logger.info("Detected availability/booking query in stream, enhancing context with availability information")
                     # Extract cottage number if mentioned
                     cottage_num = None
                     query_lower_stream = request.question.lower()
@@ -3726,7 +4664,37 @@ async def chat_stream(
                             cottage_num = num
                             break
                     
-                    # Create availability information document
+                    # Create availability information document with Cottage 9 and 11 prioritization
+                    if cottage_num == "7":
+                        # User specifically asked for Cottage 7
+                        cottage_info = "✅ Cottage 7 is available throughout the year, subject to availability"
+                        booking_cottages = "Cottage 7"
+                        airbnb_links = "- Book Cottage 7: Contact manager for booking link"
+                        prioritization_rules = "- User specifically asked for Cottage 7 - provide information for this cottage only"
+                    elif cottage_num:
+                        # User specifically asked for a cottage (9 or 11)
+                        cottage_info = f"✅ Cottage {cottage_num} is available throughout the year, subject to availability"
+                        booking_cottages = f"Cottage {cottage_num}"
+                        if cottage_num == "9":
+                            airbnb_links = "- Book Cottage 9 on Airbnb: https://www.airbnb.com/rooms/651168099240245080"
+                        elif cottage_num == "11":
+                            airbnb_links = "- Book Cottage 11 on Airbnb: https://www.airbnb.com/rooms/886682083069412842"
+                        else:
+                            airbnb_links = "- Contact manager for booking link"
+                        prioritization_rules = f"- User specifically asked for Cottage {cottage_num} - provide information for this cottage only"
+                    else:
+                        # General query - prioritize Cottage 9 and 11
+                        cottage_info = "✅ Cottage 9 and Cottage 11 are available throughout the year, subject to availability. These are our recommended 3-bedroom cottages ideal for families."
+                        booking_cottages = "Cottage 9 or Cottage 11"
+                        airbnb_links = """- Book Cottage 9 on Airbnb: https://www.airbnb.com/rooms/651168099240245080
+- Book Cottage 11 on Airbnb: https://www.airbnb.com/rooms/886682083069412842"""
+                        prioritization_rules = """- **CRITICAL**: User did NOT specify a cottage - YOU MUST prioritize and mention Cottage 9 and Cottage 11 FIRST
+- **ABSOLUTE RULE**: DO NOT mention Cottage 7 in your response unless user specifically asks for "Cottage 7" or "cottage 7"
+- **YOUR RESPONSE MUST START WITH**: "You can book Cottage 9 or Cottage 11..." NOT "cottages 7, 9, and 11"
+- **IGNORE any context documents that mention Cottage 7** - they are for reference only
+- **YOU MUST prioritize Cottage 9 and Cottage 11** - mention them first, include their Airbnb links
+- **DO NOT say "Cottage 7, 9, and 11"** - say "Cottage 9 and Cottage 11" only"""
+                    
                     availability_info = f"""
 🚨🚨🚨 CRITICAL AVAILABILITY INFORMATION - HIGHEST PRIORITY 🚨🚨🚨
 
@@ -3735,31 +4703,29 @@ YES, Swiss Cottages ARE AVAILABLE THROUGHOUT THE YEAR (YEAR-ROUND), subject to e
 
 AVAILABILITY STATUS:
 ✅ Swiss Cottages are available year-round (throughout the year), subject to availability
-✅ All cottages (Cottage 7, 9, and 11) are available throughout the year
+{cottage_info}
 ✅ Availability is subject to existing bookings only
 
-{"COTTAGE-SPECIFIC INFORMATION:" if cottage_num else "GENERAL INFORMATION:"}
-{"✅ Cottage " + cottage_num + " is available throughout the year, subject to availability" if cottage_num else "✅ All cottages are available throughout the year, subject to availability"}
+🚨🚨🚨 MANDATORY COTTAGE PRIORITIZATION - HIGHEST PRIORITY 🚨🚨🚨:
+{prioritization_rules}
 
 BOOKING INFORMATION (MANAGER-STYLE):
-To confirm your booking:
-1. Provide your exact check-in and check-out dates
-2. Provide the number of guests
-3. Specify your preferred cottage (if any)
-4. Contact us to confirm availability and complete booking
-
-CONTACT INFORMATION:
-- Contact us: https://swisscottagesbhurban.com/contact-us/
-- Cottage Manager (Abdullah): +92 300 1218563
+To book {booking_cottages}:
+1. Visit our website: https://swisscottagesbhurban.com
+2. Use the "Book Now" button or contact us directly
+3. Book via Airbnb:
+{airbnb_links}
+4. Contact Manager (Abdullah): +92 300 1218563 (WhatsApp)
 
 ⚠️⚠️⚠️ CRITICAL INSTRUCTIONS FOR LLM - YOU MUST FOLLOW THESE ⚠️⚠️⚠️:
 1. YOU MUST start your answer with: "Yes, Swiss Cottages are available throughout the year, subject to availability"
-2. DO NOT say "not available" or "options are not available" - cottages are available year-round
-3. DO NOT say "I don't have real-time availability" - say they are available year-round
-4. Always confirm availability positively and prominently
-5. Provide manager-style booking information with contact details
-6. If user provides dates, acknowledge them and guide them to contact for confirmation
-7. The cottages are available year-round - emphasize this clearly in your response
+{"2. YOU MUST prioritize Cottage 9 and Cottage 11 - mention them FIRST, include their Airbnb links" if not cottage_num else "2. Provide information for Cottage " + cottage_num + " as requested"}
+{"3. DO NOT mention Cottage 7 unless user specifically asks for it" if not cottage_num else ""}
+4. Include Airbnb links for Cottage 9 and Cottage 11 (or Cottage 7 if specifically requested)
+5. Format website URL correctly: https://swisscottagesbhurban.com (not httpsswisscottagesbhurbancom)
+6. DO NOT say "not available" or "options are not available" - cottages are available year-round
+7. Always confirm availability positively and prominently
+8. Provide complete booking information with all links
 """
                     # Add as a document to retrieved contents (at the beginning for priority)
                     from entities.document import Document
@@ -3807,6 +4773,22 @@ CONTACT INFORMATION:
                 yield f"data: {json.dumps({'type': 'sources_found', 'sources': sources[:effective_k]})}\n\n"
                 await asyncio.sleep(0.05)
             
+            # Check if we have pricing/capacity results even if no documents retrieved
+            if not retrieved_contents:
+                # Pricing and capacity handlers can work without retrieved documents
+                if pricing_result and pricing_result.get("answer_template"):
+                    # Pricing handler has generated content, use it
+                    logger.info("No documents retrieved but pricing_result exists - will use pricing template")
+                    retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                        retrieved_contents if retrieved_contents else [], pricing_result
+                    )
+                elif capacity_result and capacity_result.get("answer_template"):
+                    # Capacity handler has generated content, use it
+                    logger.info("No documents retrieved but capacity_result exists - will use capacity template")
+                    retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                        retrieved_contents if retrieved_contents else [], capacity_result
+                    )
+            
             if not retrieved_contents:
                 # Hide searching message before showing fallback
                 yield f"data: {json.dumps({'type': 'hide_searching'})}\n\n"
@@ -3843,26 +4825,49 @@ CONTACT INFORMATION:
             
             # Generate answer with streaming
             # Optimize max_new_tokens based on query complexity
-            base_max_tokens = request.max_new_tokens or 512
+            base_max_tokens = request.max_new_tokens or 1024  # Increased default to prevent cut-off responses
             query_lower_for_tokens = request.question.lower()
             
-            # Reduce tokens for simple queries (faster responses)
-            if any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]):
-                max_new_tokens = min(base_max_tokens, 64)  # Very short for greetings/acknowledgments
-            # "Tell me about cottage X" - limit to prevent overly long responses
-            elif "tell me about" in query_lower_for_tokens and any(cottage in query_lower_for_tokens for cottage in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
-                max_new_tokens = min(base_max_tokens, 256)  # Limit for specific cottage questions
+            # CRITICAL: Check for booking/availability queries FIRST (before other checks)
+            # Availability/booking queries need more tokens for complete responses
+            # Check phrases first (multi-word patterns)
+            booking_phrases = [
+                "i want to check", "i want to book", "check availability and book", 
+                "book a cottage", "check availability", "want to check", "want to book"
+            ]
+            has_booking_phrase = any(phrase in query_lower_for_tokens for phrase in booking_phrases)
+            
+            # Check single words
+            booking_words = ["pricing", "price", "cost", "booking", "availability", "book", "available", "reserve", "reservation"]
+            has_booking_word = any(word in query_lower_for_tokens for word in booking_words)
+            
+            is_booking_availability_query = (
+                has_booking_phrase or 
+                has_booking_word or
+                intent in [IntentType.BOOKING, IntentType.AVAILABILITY]
+            )
+            
+            logger.info(f"🔍 Booking query check: phrase={has_booking_phrase}, word={has_booking_word}, intent={intent}, result={is_booking_availability_query}, query='{request.question[:100]}'")
+            
+            # CRITICAL: Check booking/availability queries FIRST before any other checks
+            # Availability/booking queries need more tokens for complete responses
+            if is_booking_availability_query:
+                max_new_tokens = max(base_max_tokens, 1024)  # Ensure enough tokens for complete booking/availability responses
+                logger.info(f"✅ BOOKING/AVAILABILITY QUERY DETECTED - Setting max_new_tokens to {max_new_tokens} for query: '{request.question[:100]}', intent: {intent}")
+            # Reduce tokens ONLY for very simple greetings/acknowledgments
+            elif any(word in query_lower_for_tokens for word in ["yes", "no", "hi", "hello", "thanks", "thank you", "ok", "okay"]) and len(request.question.split()) <= 3:
+                max_new_tokens = min(base_max_tokens, 128)  # Short for very simple greetings only
             # "Tell me more" follow-ups - need more tokens to complete properly
             elif any(phrase in query_lower_for_tokens for phrase in ["tell me more", "tell me more about", "more about", "more details", "more information"]):
-                max_new_tokens = min(base_max_tokens, 512)  # Ensure enough tokens for follow-ups
-            elif len(request.question.split()) < 5:
-                max_new_tokens = min(base_max_tokens, 256)  # Short for brief questions
-            elif any(word in query_lower_for_tokens for word in ["pricing", "price", "cost", "booking", "availability"]):
-                max_new_tokens = base_max_tokens  # Full tokens for important queries
+                max_new_tokens = max(base_max_tokens, 1024)  # Ensure enough tokens for follow-ups
+            # Very short questions (1-2 words) can use fewer tokens
+            elif len(request.question.split()) <= 2:
+                max_new_tokens = min(base_max_tokens, 512)  # Short for very brief questions only
             else:
-                max_new_tokens = min(base_max_tokens, 512)  # Default for other queries
+                # Default: Use full base_max_tokens to ensure complete responses
+                max_new_tokens = base_max_tokens  # Use full amount to prevent cut-off responses
             
-            logger.debug(f"Query complexity adjustment: base={base_max_tokens}, adjusted={max_new_tokens}")
+            logger.info(f"Query complexity adjustment: base={base_max_tokens}, adjusted={max_new_tokens}, query='{request.question[:100]}'")
             
             enhanced_question = refined_question
             
@@ -3873,8 +4878,8 @@ CONTACT INFORMATION:
                     slot_info_parts.append(f"for {slots['nights']} nights")
                 if slots.get("guests"):
                     slot_info_parts.append(f"for {slots['guests']} guests")
-                if slots.get("room_type"):
-                    slot_info_parts.append(f"in {slots['room_type']}")
+                if slots.get("cottage_id"):
+                    slot_info_parts.append(f"in {slots['cottage_id']}")
                 if slot_info_parts:
                     enhanced_question = f"{refined_question} ({', '.join(slot_info_parts)})"
             
@@ -3883,6 +4888,29 @@ CONTACT INFORMATION:
                 # Inject essential info (capacity for cottage descriptions)
                 slots_dict = slot_manager.get_slots() if slot_manager else {}
                 retrieved_contents = inject_essential_info(retrieved_contents, request.question, slots_dict)
+                
+                # For general booking/availability queries (no specific cottage), deprioritize documents mentioning Cottage 7
+                query_lower_deprio = request.question.lower()
+                if is_booking_availability_query and not any(f"cottage {num}" in query_lower_deprio or f"cottage{num}" in query_lower_deprio for num in ["7", "9", "11"]):
+                    # General booking query - prioritize documents that mention Cottage 9/11, deprioritize those mentioning Cottage 7
+                    cottage_9_11_docs = []
+                    cottage_7_docs = []
+                    other_docs = []
+                    for doc in retrieved_contents:
+                        doc_lower = doc.page_content.lower()
+                        mentions_7 = "cottage 7" in doc_lower or "cottage7" in doc_lower
+                        mentions_9_11 = ("cottage 9" in doc_lower or "cottage9" in doc_lower or 
+                                         "cottage 11" in doc_lower or "cottage11" in doc_lower)
+                        if mentions_9_11 and not mentions_7:
+                            cottage_9_11_docs.append(doc)
+                        elif mentions_7:
+                            cottage_7_docs.append(doc)
+                        else:
+                            other_docs.append(doc)
+                    # Reorder: Cottage 9/11 docs first, then others, then Cottage 7 docs last
+                    retrieved_contents = cottage_9_11_docs + other_docs + cottage_7_docs
+                    if cottage_7_docs:
+                        logger.info(f"Deprioritized {len(cottage_7_docs)} document(s) mentioning Cottage 7 for general booking query")
                 
                 # Filter pricing from context for non-pricing queries
                 retrieved_contents = filter_pricing_from_context(retrieved_contents, request.question)
@@ -3900,6 +4928,20 @@ CONTACT INFORMATION:
                     logger.info(f"Prioritized {safety_docs_count} safety documents for safety query")
             
             # Validate inputs before calling answer_with_context
+            # But first check if we have pricing/capacity results (they can work without retrieved documents)
+            if not retrieved_contents:
+                # Check if pricing handler has generated content
+                if pricing_result and pricing_result.get("answer_template"):
+                    logger.info("No documents retrieved but pricing_result exists - enhancing context with pricing template")
+                    retrieved_contents = pricing_handler.enhance_context_with_pricing_info(
+                        [], pricing_result
+                    )
+                elif capacity_result and capacity_result.get("answer_template"):
+                    logger.info("No documents retrieved but capacity_result exists - enhancing context with capacity template")
+                    retrieved_contents = capacity_handler.enhance_context_with_capacity_info(
+                        [], capacity_result
+                    )
+            
             if not retrieved_contents:
                 logger.error("retrieved_contents is empty - cannot generate answer")
                 answer = "I couldn't find specific information about that in our knowledge base.\n\n💡 **Please try:**\n- Rephrasing your question\n- Using different keywords\n- Being more specific about Swiss Cottages Bhurban"
@@ -3926,7 +4968,9 @@ CONTACT INFORMATION:
             
             try:
                 # Log before calling to help debug
-                logger.info(f"Calling answer_with_context with {len(retrieved_contents)} documents, strategy: {type(ctx_synthesis_strategy).__name__}, use_simple_prompt: {use_simple_prompt}")
+                logger.info(f"Calling answer_with_context with {len(retrieved_contents)} documents, strategy: {type(ctx_synthesis_strategy).__name__}, use_simple_prompt: {use_simple_prompt}, max_new_tokens={max_new_tokens}")
+                # Get intent type for intent-specific prompts
+                intent_type_str = intent.value if hasattr(intent, 'value') else str(intent)
                 streamer, _ = answer_with_context(
                     selected_llm,
                     ctx_synthesis_strategy,
@@ -3935,6 +4979,7 @@ CONTACT INFORMATION:
                     retrieved_contents,
                     max_new_tokens,
                     use_simple_prompt=use_simple_prompt,
+                    intent=intent_type_str,  # Pass intent for intent-specific prompts
                 )
                 logger.info(f"answer_with_context returned successfully, streamer type: {type(streamer)}")
             except Exception as e:
@@ -3948,6 +4993,7 @@ CONTACT INFORMATION:
                     if not use_simple_prompt:
                         logger.warning("Request too large (413 error), retrying with simple prompt to reduce size")
                         try:
+                            intent_type_str = intent.value if hasattr(intent, 'value') else str(intent)
                             streamer, _ = answer_with_context(
                                 selected_llm,
                                 ctx_synthesis_strategy,
@@ -3956,6 +5002,7 @@ CONTACT INFORMATION:
                                 retrieved_contents,
                                 max_new_tokens,
                                 use_simple_prompt=True,  # Use simple prompt to reduce size
+                                intent=intent_type_str if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                             )
                             logger.info("Retry with simple prompt succeeded")
                         except Exception as retry_e:
@@ -3976,6 +5023,7 @@ CONTACT INFORMATION:
                     if not use_simple_prompt:
                         logger.warning("Request too large (413 error), retrying with simple prompt to reduce size")
                         try:
+                            intent_type_str = intent.value if hasattr(intent, 'value') else str(intent)
                             streamer, _ = answer_with_context(
                                 selected_llm,
                                 ctx_synthesis_strategy,
@@ -3984,6 +5032,7 @@ CONTACT INFORMATION:
                                 retrieved_contents,
                                 max_new_tokens,
                                 use_simple_prompt=True,  # Use simple prompt to reduce size
+                                intent=intent_type_str if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                             )
                             logger.info("Retry with simple prompt succeeded")
                             # Continue with streaming instead of returning error
@@ -3997,6 +5046,7 @@ CONTACT INFORMATION:
                                 try:
                                     selected_llm = get_reasoning_llm_client()
                                     logger.info("Retrying with reasoning model and simple prompt")
+                                    intent_type_str = intent.value if hasattr(intent, 'value') else str(intent)
                                     streamer, _ = answer_with_context(
                                         selected_llm,
                                         ctx_synthesis_strategy,
@@ -4005,6 +5055,7 @@ CONTACT INFORMATION:
                                         retrieved_contents,
                                         max_new_tokens,
                                         use_simple_prompt=True,  # Still use simple prompt
+                                        intent=intent_type_str if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                                     )
                                     logger.info("Fallback to reasoning model with simple prompt succeeded")
                                     # Continue with streaming instead of returning error
@@ -4039,6 +5090,7 @@ CONTACT INFORMATION:
                             try:
                                 selected_llm = get_reasoning_llm_client()
                                 logger.info("Retrying with reasoning model and simple prompt")
+                                intent_type_str = intent.value if hasattr(intent, 'value') else str(intent)
                                 streamer, _ = answer_with_context(
                                     selected_llm,
                                     ctx_synthesis_strategy,
@@ -4047,6 +5099,7 @@ CONTACT INFORMATION:
                                     retrieved_contents,
                                     max_new_tokens,
                                     use_simple_prompt=True,
+                                    intent=intent_type_str if is_intent_filtering_enabled() else None,  # Pass intent for intent-specific prompts (if enabled)
                                 )
                                 logger.info("Fallback to reasoning model succeeded")
                                 # Continue with streaming instead of returning error
@@ -4215,40 +5268,8 @@ CONTACT INFORMATION:
                         full_answer = full_answer.strip() + "."
                         logger.info("Added period to incomplete final answer")
                 
-                # CRITICAL: Additional check to remove structured pricing template if it still exists
-                if full_answer and ('🚨 CRITICAL PRICING INFORMATION' in full_answer or 'STRUCTURED PRICING ANALYSIS' in full_answer.upper()):
-                    # Find where the actual answer starts
-                    answer_start_patterns = [
-                        r'(For \d+ nights?.*?total cost is PKR \d+)',
-                        r'(The total cost.*?PKR \d+)',
-                        r'(Total cost.*?PKR \d+)',
-                        r'(Cottage \d+.*?PKR \d+)',
-                        r'(For \d+ nights?.*?PKR \d+)',
-                    ]
-                    
-                    extracted_answer = None
-                    for pattern in answer_start_patterns:
-                        match = re.search(pattern, full_answer, re.IGNORECASE | re.DOTALL)
-                        if match:
-                            extracted_answer = match.group(1).strip()
-                            break
-                    
-                    if extracted_answer:
-                        full_answer = extracted_answer
-                    else:
-                        # Find first line that looks like an answer
-                        lines = full_answer.split('\n')
-                        for line in lines:
-                            line_stripped = line.strip()
-                            if any(keyword in line_stripped.upper() for keyword in [
-                                'CRITICAL PRICING', 'MANDATORY INSTRUCTIONS', 'STRUCTURED PRICING',
-                                'DO NOT CONVERT', 'YOU MUST USE', 'ALL PRICES ARE IN PKR', '🚨', '⚠️'
-                            ]):
-                                continue
-                            if len(line_stripped) > 20 and ('PKR' in line_stripped or 'cost' in line_stripped.lower() or 'nights' in line_stripped.lower()):
-                                idx = lines.index(line)
-                                full_answer = '\n'.join(lines[idx:]).strip()
-                                break
+                # CRITICAL: Additional aggressive check to remove structured pricing template if it still exists
+                full_answer = remove_pricing_template_aggressively(full_answer)
             except Exception as e:
                 logger.warning(f"Error cleaning answer text: {e}")
             
@@ -4409,10 +5430,15 @@ CONTACT INFORMATION:
             chat_history.append(f"question: {refined_question}, answer: {full_answer}")
             
             # Generate follow-up actions
+            # Convert chat_history to list format for recommendations
+            chat_history_list = list(chat_history) if chat_history else []
             follow_up_actions = generate_follow_up_actions(
                 intent,
                 slot_manager.get_slots(),
                 request.question,
+                context_tracker=context_tracker,
+                chat_history=chat_history_list,
+                llm_client=selected_llm,
                 is_widget_query=is_widget_query
             )
             

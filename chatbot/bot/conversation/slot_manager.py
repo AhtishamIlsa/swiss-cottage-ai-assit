@@ -26,12 +26,12 @@ SLOT_DEFINITIONS = {
         "validation": lambda x: isinstance(x, int) and 1 <= x <= 9,
         "default": None,
     },
-    "room_type": {
+    "cottage_id": {
         "type": "enum",
         "values": ["cottage_7", "cottage_9", "cottage_11", "any"],
         "required_for": ["pricing", "booking", "availability", "rooms"],
         "priority": 2,
-        "extraction_keywords": ["cottage", "room", "property"],
+        "extraction_keywords": ["cottage", "property"],
         "validation": lambda x: x in ["cottage_7", "cottage_9", "cottage_11", "any"] if x else True,
         "default": None,
     },
@@ -110,6 +110,123 @@ class SlotManager:
         self.cottage_extractor = ExtractCottageNumber()
         self.date_extractor = get_date_extractor()
     
+    def should_use_current_cottage(self, query: str, intent: "IntentType") -> bool:
+        """
+        Determine if current_cottage should be used for cottage_id slot.
+        
+        Only use current_cottage when:
+        1. Query explicitly mentions a cottage, OR
+        2. Intent requires cottage_id AND query is a specific calculation (not general info)
+        
+        Args:
+            query: User query string
+            intent: Detected intent type
+            
+        Returns:
+            True if current_cottage should be used, False otherwise
+        """
+        query_lower = query.lower()
+        intent_name = intent.value if hasattr(intent, 'value') else str(intent)
+        
+        # Check if query explicitly mentions a cottage
+        if any(word in query_lower for word in ["cottage 7", "cottage 9", "cottage 11", "cottage7", "cottage9", "cottage11"]):
+            return True
+        
+        # For general info intents (LOCATION, FACILITIES, FAQ_QUESTION), NEVER use current_cottage
+        general_info_intents = ["location", "facilities", "faq_question"]
+        if intent_name in general_info_intents:
+            return False
+        
+        # Check if intent requires cottage_id
+        requires_cottage = intent_name in SLOT_DEFINITIONS.get("cottage_id", {}).get("required_for", [])
+        if not requires_cottage:
+            return False
+        
+        # Only use current_cottage for specific calculations, not general info queries
+        # General info patterns that should NOT use current_cottage
+        general_info_patterns = [
+            "what is", "what are", "tell me about", "tell me the", "explain", "describe",
+            "how can", "how do", "is there", "are there", "do you have", "can i",
+            "who is", "who are", "where is", "where are", "when is", "when are",
+            "are", "is"  # Questions like "are restaurants nearby", "is it safe"
+        ]
+        
+        # Check if this is a general info query (check if query starts with or contains these patterns)
+        is_general_info = any(
+            query_lower.startswith(pattern) or 
+            (pattern in query_lower and len(query_lower.split()) <= 8)  # Short queries with these words are likely general
+            for pattern in general_info_patterns
+        )
+        
+        # If it's a general info query, don't use current_cottage
+        if is_general_info:
+            # Exception: if query explicitly asks "for this cottage" or "for cottage X"
+            if not any(phrase in query_lower for phrase in ["for this", "for cottage", "for the cottage"]):
+                return False
+        
+        # For specific calculations (e.g., "pricing for 4 guests", "book for dates")
+        # Check if query has calculation keywords
+        calculation_keywords = ["for", "with", "when", "dates", "guests", "book", "calculate", "pricing for", "cost for"]
+        is_specific_calculation = any(keyword in query_lower for keyword in calculation_keywords)
+        
+        # Use current_cottage for specific calculations that require cottage_id
+        return is_specific_calculation
+    
+    def should_extract_slots(self, intent: "IntentType", query: str) -> bool:
+        """
+        Check if query requires slot extraction (specific calculation) vs general info.
+        
+        General info queries don't need slots - they're asking about policies, processes, descriptions.
+        Specific calculation queries need slots - they're asking for a specific price/booking.
+        
+        Args:
+            intent: Detected intent type
+            query: User query string
+            
+        Returns:
+            True if slots should be extracted, False for general info queries
+        """
+        query_lower = query.lower()
+        intent_name = intent.value if hasattr(intent, 'value') else str(intent)
+        
+        # General info patterns that don't need slots
+        general_info_patterns = [
+            "what is", "what are", "tell me about", "tell me the", "explain", "describe",
+            "how can", "how do", "is there", "are there", "do you have", "can i",
+            "who is", "who are", "where is", "where are", "when is", "when are"
+        ]
+        
+        # Check if this is a general info query
+        is_general_info = any(query_lower.startswith(pattern) for pattern in general_info_patterns)
+        
+        if is_general_info:
+            # Check if it's asking for specific calculation (e.g., "what is pricing for 4 guests")
+            calculation_keywords = ["for", "with", "when", "dates", "guests", "book", "calculate"]
+            has_calculation_keywords = any(keyword in query_lower for keyword in calculation_keywords)
+            
+            # If it has calculation keywords, it's a specific calculation
+            if has_calculation_keywords:
+                return True
+            
+            # Otherwise, it's general info - no slots needed
+            return False
+        
+        # Specific calculation queries need slots
+        calculation_keywords = ["for", "with", "when", "dates", "guests", "book", "calculate", "pricing for", "cost for"]
+        if any(keyword in query_lower for keyword in calculation_keywords):
+            return True
+        
+        # For certain intents, always extract slots if required
+        requires_slots = intent_name in ["pricing", "booking", "availability"]
+        if requires_slots:
+            # But still check if it's a general question
+            if any(word in query_lower for word in ["what is", "what are", "tell me", "explain"]):
+                # General pricing/booking question - no slots needed
+                return False
+        
+        # Default: extract slots for pricing/booking/availability intents
+        return requires_slots
+    
     def extract_slots(self, query: str, intent: "IntentType") -> Dict[str, Any]:
         """
         Extract slots from user query using pattern matching + LLM.
@@ -134,35 +251,37 @@ class SlotManager:
                 # Also try LLM extraction as fallback for complex patterns
                 logger.debug(f"Pattern extraction failed, will try LLM extraction if available")
         
-        # Extract room_type (cottage number)
+        # Extract cottage_id (cottage number)
         cottage_num = self.cottage_extractor.extract_cottage_number(query)
         if cottage_num:
             # Update current cottage being discussed
             self.current_cottage = cottage_num
             logger.debug(f"Updated current_cottage to: {cottage_num}")
             
-            # Map cottage number to room_type enum
-            if "room_type" not in self.slots or self.slots["room_type"] is None:
+            # Map cottage number to cottage_id enum
+            if "cottage_id" not in self.slots or self.slots["cottage_id"] is None:
                 if cottage_num == "7":
-                    extracted["room_type"] = "cottage_7"
+                    extracted["cottage_id"] = "cottage_7"
                 elif cottage_num == "9":
-                    extracted["room_type"] = "cottage_9"
+                    extracted["cottage_id"] = "cottage_9"
                 elif cottage_num == "11":
-                    extracted["room_type"] = "cottage_11"
+                    extracted["cottage_id"] = "cottage_11"
                 else:
-                    extracted["room_type"] = "any"
-                logger.debug(f"Extracted room_type slot: {extracted['room_type']}")
-        elif self.current_cottage:
-            # If no cottage mentioned in query but we have a current cottage from previous conversation,
-            # use it for room_type if not already set
-            if "room_type" not in self.slots or self.slots["room_type"] is None:
+                    extracted["cottage_id"] = "any"
+                logger.debug(f"Extracted cottage_id slot: {extracted['cottage_id']}")
+        elif self.current_cottage and self.should_use_current_cottage(query, intent):
+            # Only use current_cottage if query explicitly mentions cottage or is specific calculation
+            # This prevents contamination: general info queries shouldn't use current_cottage
+            if "cottage_id" not in self.slots or self.slots["cottage_id"] is None:
                 if self.current_cottage == "7":
-                    extracted["room_type"] = "cottage_7"
+                    extracted["cottage_id"] = "cottage_7"
                 elif self.current_cottage == "9":
-                    extracted["room_type"] = "cottage_9"
+                    extracted["cottage_id"] = "cottage_9"
                 elif self.current_cottage == "11":
-                    extracted["room_type"] = "cottage_11"
-                logger.debug(f"Using current_cottage {self.current_cottage} for room_type slot")
+                    extracted["cottage_id"] = "cottage_11"
+                logger.debug(f"Using current_cottage {self.current_cottage} for cottage_id slot (query is specific calculation)")
+            else:
+                logger.debug(f"Not using current_cottage {self.current_cottage} - query is general info or cottage_id already set")
         
         # Extract dates using DateExtractor (regex-based)
         # Only extract if dates are not already in slots (persist across turns)
@@ -265,33 +384,30 @@ Intent: {intent.value if hasattr(intent, 'value') else str(intent)}
 
 Extract the following information if mentioned:
 1. guests: Number of guests/people/members (1-9)
-2. room_type: Cottage number (7, 9, 11, or "any")
-3. dates: Check-in and check-out dates - CRITICAL: Extract dates in ANY format:
-   - "23 march to 25 march"
-   - "march 23 to march 25"
-   - "23/3 to 25/3" or "23-3 to 25-3"
-   - "from 23 march to 25 march"
-   - "23-25 march" or "march 23-25"
-   - "23rd march to 25th march"
-   - "these days" or "those dates" (if dates were mentioned earlier)
+2. cottage_id: Cottage number (7, 9, 11, or "any")
+3. dates: Check-in and check-out dates - CRITICAL: Extract dates ONLY if explicitly mentioned in the query.
+   🚨 ABSOLUTE PROHIBITION: DO NOT generate, invent, or assume dates if the user doesn't mention any dates. Return null for dates if no dates are mentioned.
+   🚨 DO NOT create example dates like "23 march" or "march 23" - only extract dates that the user actually says.
+   If user says "these days" or "those dates", return null for dates (they should come from conversation context).
 4. family: true if for family/with kids, false if for friends/colleagues
 5. season: weekday, weekend, peak, or off-peak
 
-For dates, extract the START DATE and END DATE in natural format (e.g., "23 march", "march 23", "23/3").
-If user says "these days" or "those dates", return null for dates (they should come from conversation context).
+🚨 CRITICAL FOR DATES: If the user does NOT mention any dates in their query, you MUST return null for dates. DO NOT create example dates or assume dates.
 
 Respond in JSON format with only the fields that are explicitly mentioned:
 {{
   "guests": <integer or null>,
-  "room_type": "<cottage_7|cottage_9|cottage_11|any|null>",
+  "cottage_id": "<cottage_7|cottage_9|cottage_11|any|null>",
   "dates": {{
-    "start": "<date in natural format like '23 march' or 'march 23'>",
-    "end": "<date in natural format like '25 march' or 'march 25'>",
-    "raw_text": "<original date text from query>"
+    "start": "<start date ONLY if user mentions dates>",
+    "end": "<end date ONLY if user mentions dates>",
+    "raw_text": "<original date text from query ONLY if user mentions dates>"
   }} or null,
   "family": <true|false|null>,
   "season": "<weekday|weekend|peak|off-peak|null>"
 }}
+
+🚨 CRITICAL REMINDER: For dates, return null if the user does NOT mention any dates. DO NOT use example dates.
 
 Only include fields explicitly mentioned. Return null for fields not mentioned.
 IMPORTANT: Return ONLY valid JSON, no additional text before or after."""
@@ -339,23 +455,41 @@ IMPORTANT: Return ONLY valid JSON, no additional text before or after."""
                     # Dates not found by LLM - this is fine, will fallback to regex
                     logger.debug("LLM did not find dates in query")
                 
-                # Process room_type: convert to proper format
-                if extracted.get("room_type"):
-                    room_type = extracted["room_type"].lower()
-                    if room_type in ["7", "cottage_7", "cottage 7"]:
-                        extracted["room_type"] = "cottage_7"
+                # Process cottage_id: convert to proper format
+                if extracted.get("cottage_id"):
+                    cottage_id = extracted["cottage_id"].lower()
+                    if cottage_id in ["7", "cottage_7", "cottage 7"]:
+                        extracted["cottage_id"] = "cottage_7"
                         self.current_cottage = "7"
-                    elif room_type in ["9", "cottage_9", "cottage 9"]:
-                        extracted["room_type"] = "cottage_9"
+                    elif cottage_id in ["9", "cottage_9", "cottage 9"]:
+                        extracted["cottage_id"] = "cottage_9"
                         self.current_cottage = "9"
-                    elif room_type in ["11", "cottage_11", "cottage 11"]:
-                        extracted["room_type"] = "cottage_11"
+                    elif cottage_id in ["11", "cottage_11", "cottage 11"]:
+                        extracted["cottage_id"] = "cottage_11"
                         self.current_cottage = "11"
-                    elif room_type in ["any", "none", "null"]:
-                        extracted["room_type"] = "any"
+                    elif cottage_id in ["any", "none", "null"]:
+                        extracted["cottage_id"] = "any"
                         # Don't clear current_cottage if set to "any" - keep previous cottage
                     else:
-                        extracted["room_type"] = None
+                        extracted["cottage_id"] = None
+                # Also handle legacy "room_type" key for backward compatibility
+                elif extracted.get("room_type"):
+                    room_type = extracted["room_type"].lower()
+                    if room_type in ["7", "cottage_7", "cottage 7"]:
+                        extracted["cottage_id"] = "cottage_7"
+                        self.current_cottage = "7"
+                    elif room_type in ["9", "cottage_9", "cottage 9"]:
+                        extracted["cottage_id"] = "cottage_9"
+                        self.current_cottage = "9"
+                    elif room_type in ["11", "cottage_11", "cottage 11"]:
+                        extracted["cottage_id"] = "cottage_11"
+                        self.current_cottage = "11"
+                    elif room_type in ["any", "none", "null"]:
+                        extracted["cottage_id"] = "any"
+                    else:
+                        extracted["cottage_id"] = None
+                    # Remove legacy key
+                    extracted.pop("room_type", None)
                 
                 logger.info(f"✅ LLM extracted slots: {list(extracted.keys())}")
                 return extracted
@@ -389,8 +523,8 @@ IMPORTANT: Return ONLY valid JSON, no additional text before or after."""
                 old_value = self.slots.get(slot_name)
                 self.slots[slot_name] = slot_value
                 
-                # Update current_cottage when room_type changes
-                if slot_name == "room_type" and slot_value:
+                # Update current_cottage when cottage_id changes
+                if slot_name == "cottage_id" and slot_value:
                     if slot_value == "cottage_7":
                         self.current_cottage = "7"
                     elif slot_value == "cottage_9":
@@ -400,6 +534,22 @@ IMPORTANT: Return ONLY valid JSON, no additional text before or after."""
                     elif slot_value == "any":
                         # Don't clear current_cottage if set to "any" - keep previous cottage
                         pass
+                # Handle legacy room_type for backward compatibility
+                elif slot_name == "room_type" and slot_value:
+                    # Migrate to cottage_id
+                    if slot_value == "cottage_7":
+                        self.slots["cottage_id"] = "cottage_7"
+                        self.current_cottage = "7"
+                    elif slot_value == "cottage_9":
+                        self.slots["cottage_id"] = "cottage_9"
+                        self.current_cottage = "9"
+                    elif slot_value == "cottage_11":
+                        self.slots["cottage_id"] = "cottage_11"
+                        self.current_cottage = "11"
+                    elif slot_value == "any":
+                        self.slots["cottage_id"] = "any"
+                    # Remove legacy key
+                    self.slots.pop("room_type", None)
                 
                 # Track in history
                 if old_value != slot_value:
@@ -471,7 +621,7 @@ IMPORTANT: Return ONLY valid JSON, no additional text before or after."""
         Returns:
             True if enough slots filled for booking
         """
-        booking_slots = ["guests", "dates", "room_type"]
+        booking_slots = ["guests", "dates", "cottage_id"]
         filled_count = sum(1 for slot in booking_slots if slot in self.slots and self.slots[slot] is not None)
         return filled_count >= 2  # At least 2 out of 3 key slots
     

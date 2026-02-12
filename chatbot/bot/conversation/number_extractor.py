@@ -32,9 +32,18 @@ class ExtractGroupSize:
         """
         question_lower = question.lower()
         
+        # CRITICAL: First check if any numbers are clearly cottage numbers
+        # Extract all cottage numbers mentioned to exclude them from group size extraction
+        cottage_numbers = re.findall(r"cottage\s*(?:number|no|#)?\s*(\d+)", question_lower)
+        
         # Pattern 1: "6 members", "6 people", "6 guests", "6 person"
+        # IMPORTANT: More specific patterns should come first
         patterns = [
+            # Pattern for "we are 6 guest" or "we are 6 guests" - number followed by guest/guests (MOST SPECIFIC)
+            r"(?:we\s+are|group\s+of|party\s+of)\s+(\d+)\s+(?:guest|guests|member|members|people|person)",
             r"(\d+)\s*(?:members?|people|guests?|persons?|person)",
+            # Pattern for "we are family of 5" (without "a") - must come before generic "we are" pattern
+            r"we\s+are\s+family\s+of\s+(\d+)",  # "we are family of 5" pattern
             r"(?:we\s+are|group\s+of|party\s+of|with)\s+(\d+)",
             r"group\s+(\d+)",  # "group 7" pattern
             r"family\s+of\s+(\d+)",  # "family of 7" pattern
@@ -53,9 +62,13 @@ class ExtractGroupSize:
             if match:
                 try:
                     size = int(match.group(1))
+                    # CRITICAL: Exclude if this number is a cottage number
+                    if str(size) in cottage_numbers:
+                        logger.debug(f"Skipping {size} - it's a cottage number, not group size")
+                        continue
                     # Sanity check: reasonable group size (1-50)
                     if 1 <= size <= 50:
-                        logger.debug(f"Extracted group size: {size} from pattern: {pattern}")
+                        logger.info(f"Extracted group size: {size} from pattern: {pattern} (question: '{question[:100]}')")
                         return size
                 except (ValueError, IndexError):
                     continue
@@ -72,6 +85,10 @@ class ExtractGroupSize:
                 if match:
                     try:
                         size = int(match.group(1))
+                        # CRITICAL: Exclude if this number is a cottage number
+                        if str(size) in cottage_numbers:
+                            logger.debug(f"Skipping {size} - it's a cottage number, not group size")
+                            continue
                         if 1 <= size <= 50:
                             logger.debug(f"Extracted group size: {size} from capacity word pattern")
                             return size
@@ -112,9 +129,10 @@ class ExtractCottageNumber:
         group_size_indicators = ["people", "person", "guests", "guest", "members", "member", "group", "party"]
         has_group_size_context = any(indicator in question_lower for indicator in group_size_indicators)
         
-        # Pattern 1: "cottage 3", "cottage3", "cottage number 3", "cottage #3"
+        # Pattern 1: "cottage 3", "cottage3", "cottage number 3", "cottage #3", "this cottage 9", "that cottage 7"
         # These patterns REQUIRE "cottage" keyword, so they're safe
         patterns = [
+            r"(?:this|that|the)\s+cottage\s*(?:number|no|#)?\s*(\d+)",  # "this cottage 9", "that cottage 7"
             r"cottage\s*(?:number|no|#)?\s*(\d+)",
             r"cottage(\d+)",
             r"(\d+)\s*(?:bedroom|bed)\s*cottage",
@@ -241,6 +259,7 @@ class ExtractCapacityQuery:
             "accommodate", "accommodation",
             "fit", "fitting",
             "capacity",
+            "group size",  # "group size capacity", "what's the group size"
             "how many can",
             "can we",
             "will it",
@@ -316,6 +335,9 @@ class NumberExtractor:
         """
         Extract all relevant numbers from a capacity query.
         
+        CRITICAL: Cottage numbers should NOT be extracted as group sizes.
+        For example, "Cottage 11" should NOT be interpreted as "11 guests".
+        
         Args:
             question: User's question string
             
@@ -325,8 +347,38 @@ class NumberExtractor:
             - cottage_number: str or None
             - is_capacity_query: bool
         """
+        # First, extract cottage numbers to exclude them from group size extraction
+        cottage_number = self.cottage_extractor.extract_cottage_number(question)
+        
+        # Extract potential group size
+        potential_group_size = self.group_size_extractor.extract_group_size(question)
+        
+        # CRITICAL: If the extracted group size matches a cottage number mentioned in the question,
+        # it's likely a false positive (e.g., "Cottage 11" being interpreted as "11 guests")
+        # Check if the number appears in a cottage context
+        question_lower = question.lower()
+        if potential_group_size is not None:
+            # Check if this number appears as a cottage number in the question
+            cottage_patterns = [
+                rf"cottage\s*{potential_group_size}\b",
+                rf"cottage\s*number\s*{potential_group_size}\b",
+                rf"cottage\s*#{potential_group_size}\b",
+                rf"cottage\s*no\s*{potential_group_size}\b",
+            ]
+            
+            is_cottage_number = any(re.search(pattern, question_lower) for pattern in cottage_patterns)
+            
+            # Also check if multiple cottages are mentioned (e.g., "cottage 9 and cottage 11")
+            # In this case, numbers are definitely cottage numbers, not group sizes
+            cottage_mentions = re.findall(r"cottage\s*(?:number|no|#)?\s*(\d+)", question_lower)
+            has_multiple_cottages = len(cottage_mentions) > 1
+            
+            if is_cottage_number or has_multiple_cottages:
+                logger.info(f"Excluding {potential_group_size} as group size - it's a cottage number (cottage={cottage_number}, mentions={cottage_mentions})")
+                potential_group_size = None
+        
         return {
-            "group_size": self.group_size_extractor.extract_group_size(question),
-            "cottage_number": self.cottage_extractor.extract_cottage_number(question),
+            "group_size": potential_group_size,
+            "cottage_number": cottage_number,
             "is_capacity_query": self.capacity_detector.is_capacity_query(question),
         }

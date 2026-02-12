@@ -477,6 +477,7 @@ class Chroma:
         query: str,
         k: int = 4,
         threshold: float | None = 0.2,
+        filter: dict[str, str] | None = None,
     ) -> tuple[list[Document], list[dict[str, Any]]]:
         """
         Performs similarity search on the given query.
@@ -492,15 +493,26 @@ class Chroma:
         threshold : float, optional
             The threshold for considering similarity scores (default is 0.2).
 
+        filter : dict[str, str] | None, optional
+            Filter by metadata. Defaults to None.
+
         Returns:
         -------
         tuple[list[Document], list[dict[str, Any]]]
             A tuple containing the list of matched documents and a list of their sources.
 
         """
-        # `similarity_search_with_relevance_scores` return docs and relevance scores in the range [0, 1].
-        # 0 is dissimilar, 1 is most similar.
-        docs_and_scores = self.similarity_search_with_relevance_scores(query, k)
+        # Use similarity_search_with_score which supports filter, then convert to relevance scores
+        if filter is not None:
+            docs_and_scores = self.similarity_search_with_score(query, k, filter=filter)
+            # Convert distance scores to relevance scores (lower distance = higher relevance)
+            # ChromaDB returns distance scores, so we need to convert them
+            # For now, use a simple conversion: relevance = 1 / (1 + distance)
+            docs_and_scores = [(doc, 1.0 / (1.0 + score)) for doc, score in docs_and_scores]
+        else:
+            # `similarity_search_with_relevance_scores` return docs and relevance scores in the range [0, 1].
+            # 0 is dissimilar, 1 is most similar.
+            docs_and_scores = self.similarity_search_with_relevance_scores(query, k)
 
         if threshold is not None:
             docs_and_scores = [doc for doc in docs_and_scores if doc[1] > threshold]

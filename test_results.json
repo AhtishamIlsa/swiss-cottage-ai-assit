@@ -1,0 +1,92 @@
+[
+  {
+    "test_name": "General cottage query - should NOT have pricing",
+    "query": "tell me about the swiss cottages bhurban",
+    "expected_intent": "rooms",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "rooms",
+    "detected_intent_api": "rooms",
+    "answer": "Looking for a luxurious stay in Bhurban? The Swiss Cottages are a great choice. These privately owned cottages offer stunning mountain views, family-friendly design, and full-service comfort. They're located on Murree Hill, near the Chinar Golf Club and within walking distance.",
+    "sentence_count": 4
+  },
+  {
+    "test_name": "Which cottage is best - should NOT have pricing",
+    "query": "which cottage is best in your collections",
+    "expected_intent": "rooms",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "rooms",
+    "detected_intent_api": "rooms",
+    "answer": "\ud83c\udfe1 **Swiss Cottages Bhurban offers the following cottages:**\n\n**Cottage 9** - 3-bedroom, two-storey cottage with spacious lounge, ideal for larger groups\n- Base capacity: Up to 6 guests (standard capacity)\n- Maximum capacity: 9 guests (with prior confirmation)\n- Bedrooms: 3\n\n**Cottage 11** - 3-bedroom, two-storey cottage with unique attic space, popular with families\n- Base capacity: Up to 6 guests (standard capacity)\n- Maximum capacity: 9 guests (with prior confirmation)\n- Bedrooms: 3\n\n\nAll cottages include:\n- Fully equipped kitchen\n- Living lounge\n- Bedrooms and bathrooms\n- Outdoor terrace/balcony\n- Wi-Fi, smart TV with Netflix\n- Heating system\n- Secure parking\n\nWould you like to know more about:\n- Which cottage is best for your group size\n- Availability and booking information",
+    "sentence_count": 1
+  },
+  {
+    "test_name": "Cottage 9 description - should NOT have pricing",
+    "query": "tell me about cottage 9",
+    "expected_intent": "rooms",
+    "passed": false,
+    "issues": [
+      "Location errors: ['Azad Kashmir']"
+    ],
+    "detected_intent_direct": "rooms",
+    "detected_intent_api": "rooms",
+    "answer": "Cottage 9 is a fantastic two-story home in Bhurban, near Azad Kashmir. It's perfect for families or larger groups, accommodating up to 9 guests. The ground floor has a spacious sunlit lounge with large windows, a modern open kitchen, and a dining area that takes in the scenic surroundings. The well-appointed bathroom is conveniently located on this level.",
+    "sentence_count": 4
+  },
+  {
+    "test_name": "Location query - should NOT have pricing, correct location",
+    "query": "where is bhurban",
+    "expected_intent": "location",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "location",
+    "detected_intent_api": "location",
+    "answer": "Let me clarify that for you. Bhurban is a beautiful mountain retreat located near the Chinar Golf Club in a pine forest on Murre Hill, Pakistan. It's a popular spot for day trips and picnics, offering stunning views and a peaceful atmosphere.",
+    "sentence_count": 3
+  },
+  {
+    "test_name": "Nearby attractions - should NOT have pricing",
+    "query": "tell me the nearby attraction",
+    "expected_intent": "location",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "location",
+    "detected_intent_api": "location",
+    "answer": "If you're looking for nearby attractions in Bhurban, I've got some great recommendations for you. - The scenic walk trail on Murre Hill is just a short walk away, perfect for a hike or a relaxing stroll. - The Chinar Golf Club, adjacent to your Swiss Cottage, is ideal for a round of golf or a day out. - The Pearl Continental Bhurban (PC Bhurban) is still within walking distance, offering luxury and stunning views of the surrounding mountains.",
+    "sentence_count": 4
+  },
+  {
+    "test_name": "Capacity query - should NOT have pricing",
+    "query": "we are a family of 5 can we stay in cottage 9",
+    "expected_intent": "rooms",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "rooms",
+    "detected_intent_api": "rooms",
+    "answer": "Cottage 9 is ideal for families and larger groups, offering a unique attic sleep space, a private balcony with a peaceful natural atmosphere, and a scenic view. It has a master bedroom, a cozy sleep area on the lower level, and a well-equipped kitchen. This cottage comfortably accommodates 5 guests.\n\n\ud83d\udca1 **Tip:** Cottage 9 and Cottage 11 are 3-bedroom cottages, perfect for families or larger groups.",
+    "sentence_count": 4
+  },
+  {
+    "test_name": "Pricing query - should have pricing, NO template output",
+    "query": "tell me the pricing of cottage 9",
+    "expected_intent": "pricing",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "pricing",
+    "detected_intent_api": "pricing",
+    "answer": "The general per-night rates for Cottage 9 at Swiss Cottages Bhurban are provided at https://www.airbnb.com/room (Cottage 9) or by contacting Swiss Cottages Bhurban at httpsswisscottagesbhurbancomcontactu. Weekend: PKR 15,000, Weekday: PKR 10,000.",
+    "sentence_count": 4
+  },
+  {
+    "test_name": "Safety query - should NOT have pricing",
+    "query": "is this cottage 9 is secure",
+    "expected_intent": "safety",
+    "passed": true,
+    "issues": [],
+    "detected_intent_direct": "safety",
+    "detected_intent_api": "safety",
+    "answer": "\ud83d\udca1 **Tip:** Swiss Cottages prioritize guest safety and security. All cottages have safety measures in place, and emergency contacts are available. If you have specific safety concerns, feel free to ask, or contact our team directly.",
+    "sentence_count": 3
+  }
+]

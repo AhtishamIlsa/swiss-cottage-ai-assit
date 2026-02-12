@@ -106,6 +106,7 @@ def answer_with_context(
     retrieved_contents: list[Document],
     max_new_tokens: int = 512,
     use_simple_prompt: bool = False,
+    intent: str = None,
 ):
     """
     Generates an answer to the given question using a context synthesis strategy and retrieved contents.

@@ -160,7 +160,7 @@ class CottageRegistry:
         # Format each cottage
         for cottage in cottages:
             lines.append(f"**Cottage {cottage.number}** - {cottage.description}")
-            lines.append(f"- Base capacity: Up to {cottage.base_capacity} guests at base price")
+            lines.append(f"- Base capacity: Up to {cottage.base_capacity} guests (standard capacity)")
             lines.append(f"- Maximum capacity: {cottage.max_capacity} guests (with prior confirmation)")
             lines.append(f"- Bedrooms: {cottage.bedrooms}")
             lines.append("")

@@ -20,6 +20,29 @@ from helpers.log import get_logger
 
 logger = get_logger(__name__)
 
+# Try to import LLM client for slot requirement detection
+try:
+    import os
+    # Try to load .env file if python-dotenv is available
+    try:
+        from dotenv import load_dotenv
+        env_path = Path(__file__).parent.parent.parent / ".env"
+        if env_path.exists():
+            load_dotenv(env_path)
+            logger.info(f"Loaded environment variables from {env_path}")
+    except ImportError:
+        pass  # dotenv not available, use system env vars
+    
+    from chatbot.api.dependencies import get_fast_llm_client
+    LLM_AVAILABLE = True
+    logger.info("✅ LLM client available - will use LLM for slot detection")
+except ImportError as e:
+    LLM_AVAILABLE = False
+    logger.warning(f"LLM client not available ({e}) - will use pattern matching for slot detection")
+except Exception as e:
+    LLM_AVAILABLE = False
+    logger.warning(f"LLM client initialization failed ({e}) - will use pattern matching for slot detection")
+
 # Try to import pandas for Excel support
 try:
     import pandas as pd
@@ -68,24 +91,24 @@ CATEGORY_TO_INTENT = {
 # Intent to required slots mapping
 INTENT_TO_SLOTS = {
     "pricing": {
-        "required": ["guests", "dates", "room_type"],
+        "required": ["guests", "dates", "cottage_id"],
         "optional": ["season"],
     },
     "booking": {
-        "required": ["guests", "dates", "room_type", "family"],
+        "required": ["guests", "dates", "cottage_id", "family"],
         "optional": ["season"],
     },
     "availability": {
         "required": ["dates"],
-        "optional": ["guests", "room_type"],
+        "optional": ["guests", "cottage_id"],
     },
     "rooms": {
         "required": [],
-        "optional": ["guests", "room_type"],
+        "optional": ["guests", "cottage_id"],
     },
     "facilities": {
         "required": [],
-        "optional": ["room_type"],
+        "optional": ["cottage_id"],
     },
     "location": {
         "required": [],
@@ -105,11 +128,30 @@ INTENT_TO_SLOTS = {
 # Slot extraction hints
 SLOT_HINTS = {
     "guests": "number of guests or people",
-    "room_type": "cottage 7, 9, or 11",
+    "cottage_id": "cottage 7, 9, or 11",
     "dates": "check-in and check-out dates",
     "family": "whether booking is for family or friends",
     "season": "weekday, weekend, peak, or off-peak",
 }
+
+
+def extract_cottage_id(question: str, answer: str) -> Optional[int]:
+    """
+    Extract cottage number (7, 9, or 11) from question/answer text.
+    Returns cottage_id, NOT room_type. Cottage types are NOT room types.
+    
+    Args:
+        question: Question text
+        answer: Answer text
+        
+    Returns:
+        Cottage ID (7, 9, or 11) if found, None otherwise
+    """
+    text = (question + " " + answer).lower()
+    for num in [7, 9, 11]:
+        if f"cottage {num}" in text or f"cottage{num}" in text:
+            return num
+    return None
 
 
 def parse_frontmatter(content: str) -> tuple[Dict[str, Any], str]:
@@ -259,6 +301,150 @@ def get_slots_for_intent(intent: str) -> Dict[str, List[str]]:
     return INTENT_TO_SLOTS.get(intent, {"required": [], "optional": []})
 
 
+def is_general_info_question_llm(question: str, answer: str, intent: str, category: str) -> bool:
+    """
+    Use LLM to determine if a question is asking for general information vs specific calculation.
+    
+    General info questions don't need slots - they're asking about policies, processes, descriptions.
+    Specific calculation questions need slots - they're asking for a specific price/booking.
+    
+    Args:
+        question: The FAQ question
+        answer: The FAQ answer
+        intent: The classified intent
+        category: The FAQ category
+        
+    Returns:
+        True if this is a general info question (should have required_slots: []), False otherwise
+    """
+    if not LLM_AVAILABLE:
+        # Fallback to pattern matching if LLM not available
+        return is_general_info_question_pattern(question, intent)
+    
+    try:
+        llm = get_fast_llm_client()
+        logger.debug(f"Using LLM to classify question: '{question[:60]}...'")
+        
+        prompt = f"""You are analyzing FAQ questions for a Swiss Cottages booking chatbot to determine if they need user information (slots) to answer.
+
+PROJECT CONTEXT:
+- Swiss Cottages is a cottage rental business in Murree, Pakistan
+- Users can book cottages (Cottage 7, 9, or 11) for specific dates
+- The chatbot extracts information (slots): number of guests, dates, cottage_id, family/group type
+- GENERAL INFO questions = Don't need slots (answerable with general knowledge)
+- SPECIFIC CALCULATION questions = Need slots (require user's specific details to calculate/process)
+
+QUESTION: "{question}"
+ANSWER: "{answer}"
+INTENT: {intent}
+CATEGORY: {category}
+
+CLASSIFICATION RULES:
+
+GENERAL INFO (no slots needed) - Answer with "GENERAL":
+✅ Questions asking "What is/are..." (policies, processes, descriptions, features)
+✅ Questions asking "Who is/are..." (contact info, staff, owner)
+✅ Questions asking "How can I..." or "How do I..." (process explanations, instructions)
+✅ Questions asking "Is there..." or "Do you have..." (general availability of features/services)
+✅ Questions asking "What are the prices for..." (general price lists, not user-specific)
+✅ Questions asking "What is the difference between..." (comparisons)
+✅ Questions asking "How many..." (general capacity, features - not user-specific)
+✅ Questions asking "What payment methods..." (general policy)
+✅ Questions asking "Are cottages available..." (general availability info)
+✅ Questions about policies, procedures, descriptions, general information
+
+SPECIFIC CALCULATION (slots needed) - Answer with "SPECIFIC":
+❌ Questions with user's specific details: "I want to book for 2 guests"
+❌ Questions asking for user-specific calculations: "How much for 4 people on March 1st?"
+❌ Questions requiring user's dates/guests to answer: "Check availability for next weekend"
+❌ Questions that need user's booking details to process
+
+EXAMPLES:
+- "What is the cancellation policy?" → GENERAL (policy description)
+- "What are the prices for Cottage 11?" → GENERAL (general price list)
+- "How can I check availability?" → GENERAL (process explanation)
+- "Who is the owner?" → GENERAL (contact info)
+- "How many bedrooms are in each cottage?" → GENERAL (property description)
+- "Are cottages available year-round?" → GENERAL (general availability info)
+- "What payment methods do you accept?" → GENERAL (general policy)
+- "I want to book for 2 guests" → SPECIFIC (needs user's details)
+- "How much for 4 people on March 1st?" → SPECIFIC (needs user's details)
+
+Based on the question above, classify it as GENERAL or SPECIFIC.
+
+Respond with ONLY one word: "GENERAL" or "SPECIFIC"
+"""
+        
+        response = llm.generate_answer(prompt, max_new_tokens=10).strip().upper()
+        logger.debug(f"LLM raw response: '{response}'")
+        
+        # Parse response - look for GENERAL or SPECIFIC
+        if "GENERAL" in response:
+            logger.info(f"✅ LLM: '{question[:50]}...' → GENERAL INFO (no slots needed)")
+            return True
+        elif "SPECIFIC" in response:
+            logger.info(f"✅ LLM: '{question[:50]}...' → SPECIFIC CALCULATION (slots needed)")
+            return False
+        else:
+            # Fallback to pattern matching if LLM response unclear
+            logger.warning(f"⚠️ LLM returned unclear response: '{response}'. Falling back to pattern matching for: '{question[:50]}...'")
+            return is_general_info_question_pattern(question, intent)
+            
+    except Exception as e:
+        logger.warning(f"⚠️ LLM classification failed: {e}. Falling back to pattern matching for: '{question[:50]}...'")
+        import traceback
+        logger.debug(traceback.format_exc())
+        return is_general_info_question_pattern(question, intent)
+
+
+def is_general_info_question_pattern(question: str, intent: str) -> bool:
+    """
+    Fallback pattern matching to determine if a question is general info.
+    
+    Args:
+        question: The FAQ question
+        intent: The classified intent
+        
+    Returns:
+        True if this is a general info question, False otherwise
+    """
+    question_lower = question.lower()
+    
+    # General info question patterns
+    general_patterns = [
+        "what is", "what are", "tell me about", "explain", "describe",
+        "how do you", "how does", "do you have", "is there", "are there",
+        "can i", "can we", "is it", "does it", "will i", "what happens",
+        "what about", "how to", "how can", "where is", "where are",
+        "when is", "when are", "who is", "who are"
+    ]
+    
+    # Check if question starts with general info pattern
+    if any(question_lower.startswith(pattern) for pattern in general_patterns):
+        return True
+    
+    # Additional checks for specific intents
+    if intent == "booking":
+        # Policy/process questions are general info
+        if any(word in question_lower for word in ["policy", "process", "procedure", "who is", "who are", "is there", "are there"]):
+            return True
+    
+    if intent == "pricing":
+        # General pricing info questions (not specific calculations)
+        if any(word in question_lower for word in ["what are the prices", "what is the price", "what are prices", "difference between", "minimum stay", "maximum number"]):
+            return True
+        # But exclude specific calculation requests
+        if any(word in question_lower for word in ["for", "cost for", "price for", "how much for"]):
+            return False
+    
+    if intent == "availability":
+        # "How can I check" is general info
+        if "how can" in question_lower or "how do" in question_lower:
+            return True
+    
+    return False
+
+
 def enrich_faq_file(faq_path: Path) -> bool:
     """
     Enrich a single FAQ file with intent and slot metadata.
@@ -279,16 +465,32 @@ def enrich_faq_file(faq_path: Path) -> bool:
         # Get slots for intent
         slots = get_slots_for_intent(intent)
         
+        # Check if this is a general info question (should override required_slots)
+        question = frontmatter.get("question", "")
+        answer = content_text.split("Answer:")[-1].strip() if "Answer:" in content_text else ""
+        category = frontmatter.get("category", "")
+        
+        if is_general_info_question_llm(question, answer, intent, category):
+            # Override required_slots for general info questions
+            slots = {"required": [], "optional": slots["optional"]}
+            logger.debug(f"Question '{question[:50]}...' is general info - overriding required_slots to []")
+        
         # Check if already enriched with correct intent
         existing_intent = frontmatter.get("intent")
-        if existing_intent and existing_intent == intent and "required_slots" in frontmatter:
-            # Already enriched with correct intent, skip
-            logger.debug(f"Skipping {faq_path.name} - already enriched with correct intent {intent}")
-            return False
+        existing_required = frontmatter.get("required_slots", [])
         
-        # If intent changed or is missing, re-enrich
+        if existing_intent and existing_intent == intent and "required_slots" in frontmatter:
+            # Check if required_slots need updating
+            if existing_required == slots["required"]:
+                # Already enriched with correct intent and slots, skip
+                logger.debug(f"Skipping {faq_path.name} - already enriched with correct intent {intent} and slots")
+                return False
+        
+        # If intent changed or slots need updating, re-enrich
         if existing_intent and existing_intent != intent:
             logger.info(f"Re-enriching {faq_path.name}: intent changed from {existing_intent} to {intent}")
+        elif existing_intent and existing_required != slots["required"]:
+            logger.info(f"Re-enriching {faq_path.name}: required_slots changed from {existing_required} to {slots['required']}")
         
         # Update frontmatter
         frontmatter["intent"] = intent
@@ -496,6 +698,28 @@ def extract_faq_from_excel(excel_path: Path) -> List[Dict[str, Any]]:
         # Generate FAQ ID (use row number + 1 for 1-based indexing)
         faq_id = f"faq_{idx + 1:03d}"
         
+        # Classify intent DURING extraction
+        # Create a temporary frontmatter dict for intent classification
+        temp_frontmatter = {'category': category, 'question': question}
+        formatted_content = format_qa_for_embedding({
+            'category': category,
+            'question': question,
+            'answer': answer
+        })
+        intent = determine_intent_from_faq(temp_frontmatter, formatted_content)
+        
+        # Extract cottage_id DURING extraction
+        cottage_id = extract_cottage_id(question, answer)
+        
+        # Get slots for intent
+        slots = get_slots_for_intent(intent)
+        
+        # Check if this is a general info question (should override required_slots)
+        if is_general_info_question_llm(question, answer, intent, category):
+            # Override required_slots for general info questions
+            slots = {"required": [], "optional": slots["optional"]}
+            logger.debug(f"Question '{question[:50]}...' is general info - overriding required_slots to []")
+        
         qa_pair = {
             'faq_id': faq_id,
             'category': category,
@@ -504,7 +728,11 @@ def extract_faq_from_excel(excel_path: Path) -> List[Dict[str, Any]]:
             'account_resource': account_resource,
             'link': link,
             'source': 'Excel FAQ Export',
-            'row_number': idx + 1
+            'row_number': idx + 1,
+            'intent': intent,  # NEW: Intent classified during extraction
+            'cottage_id': cottage_id,  # NEW: Cottage ID extracted during extraction
+            'required_slots': slots['required'],  # NEW: Required slots based on intent (overridden if general info)
+            'optional_slots': slots['optional'],  # NEW: Optional slots based on intent
         }
         
         qa_pairs.append(qa_pair)
@@ -529,19 +757,43 @@ def generate_markdown_files(qa_pairs: List[Dict[str, Any]], output_dir: Path) ->
         # Format content for embedding
         formatted_content = format_qa_for_embedding(qa_pair)
         
-        # Create frontmatter
+        # Create frontmatter with intent and cottage_id
         question_escaped = qa_pair.get('question', '').replace('"', '\\"')
         category_escaped = qa_pair.get('category', 'General').replace('"', '\\"')
+        intent = qa_pair.get('intent', 'faq_question')
+        cottage_id = qa_pair.get('cottage_id')
+        required_slots = qa_pair.get('required_slots', [])
+        optional_slots = qa_pair.get('optional_slots', [])
         
-        frontmatter = f"""---
-category: "{category_escaped}"
-faq_id: "{qa_pair.get('faq_id', 'unknown')}"
-source: "{qa_pair.get('source', 'Excel FAQ Export')}"
-question: "{question_escaped}"
-type: "qa_pair"
----
-
-"""
+        # Build frontmatter with YAML formatting
+        frontmatter_lines = [
+            "---",
+            f'category: "{category_escaped}"',
+            f'faq_id: "{qa_pair.get("faq_id", "unknown")}"',
+            f'source: "{qa_pair.get("source", "Excel FAQ Export")}"',
+            f'question: "{question_escaped}"',
+            f'intent: "{intent}"',
+            f'type: "qa_pair"',
+        ]
+        
+        # Add cottage_id if present
+        if cottage_id is not None:
+            frontmatter_lines.append(f'cottage_id: {cottage_id}')
+        
+        # Add required_slots
+        if required_slots:
+            frontmatter_lines.append(f'required_slots: {required_slots}')
+        else:
+            frontmatter_lines.append('required_slots: []')
+        
+        # Add optional_slots
+        if optional_slots:
+            frontmatter_lines.append(f'optional_slots: {optional_slots}')
+        else:
+            frontmatter_lines.append('optional_slots: []')
+        
+        frontmatter_lines.append("---")
+        frontmatter = "\n".join(frontmatter_lines) + "\n\n"
         
         # Combine frontmatter and content
         markdown_content = frontmatter + formatted_content
