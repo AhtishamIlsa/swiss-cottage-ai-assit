@@ -2370,27 +2370,38 @@
                     if (this.isPlayingTTS) {
                         // Use simpler interruption detection during TTS - check RMS energy level
                         // User voice is typically louder than TTS playback, so use higher threshold
-                        const interruptionThreshold = Math.max(0.03, this.backgroundNoiseLevel * 4);
+                        const interruptionThreshold = Math.max(0.025, this.backgroundNoiseLevel * 3);
 
                         // Check if user is speaking (higher energy than TTS)
-                        // Require both high RMS AND confirmed human speech for interruption
-                        if (voiceCheck.rms > interruptionThreshold && voiceCheck.isHumanSpeech) {
-                            // Only interrupt if we have clear human speech detection
-                            if (voiceCheck.confidence >= 0.5) {
-                                // User is speaking during TTS - interrupt immediately
-                                console.log('🛑 User interruption detected during TTS playback - RMS:', voiceCheck.rms.toFixed(4), 'stopping agent speech');
+                        // Interruption: clear human speech detected during agent response
+                        if (voiceCheck.rms > interruptionThreshold) {
+                            // Require clear human speech detection for interruption
+                            if (voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.4) {
+                                // Clear human voice detected - interrupt immediately
+                                console.log('🛑 User interruption detected during TTS playback - RMS:', voiceCheck.rms.toFixed(4), 'confidence:', voiceCheck.confidence?.toFixed(2), 'stopping agent speech');
+
+                                // Stop TTS immediately (this sets isPlayingTTS = false)
                                 this.cancelProcessing();
+
                                 // Start collecting new audio from this point
                                 const buffer = new Float32Array(inputData.length);
                                 buffer.set(inputData);
                                 this.audioBuffer = [buffer];
                                 this.voiceDetected = true;
-                                this.startSilenceTimer();
-                                // Exit early - don't return, continue to collect audio
+                                this.lastHumanSpeechTime = Date.now();
+
+                                // After interruption, isPlayingTTS is false, so we'll continue to collect below
+                                // Don't return here - let it fall through to normal collection
+                            } else {
+                                // Not clear human speech yet, continue monitoring
+                                return; // Don't collect during TTS
                             }
+                        } else {
+                            // Not loud enough, continue monitoring
+                            return; // Don't collect during TTS
                         }
-                        // Don't collect audio during TTS - prevents listening to own voice
-                        return;
+                        // If we get here, we interrupted and isPlayingTTS is now false
+                        // Continue to normal collection below
                     }
 
                     // Normal recording mode - collect audio and detect voice
@@ -3297,32 +3308,72 @@
         cancelProcessing() {
             console.log('🛑 Cancelling ongoing audio processing due to user interruption');
 
-            // Stop current TTS audio playback
+            // Stop current TTS audio playback immediately
             if (this.currentAudio) {
-                this.currentAudio.pause();
-                this.currentAudio.currentTime = 0; // Reset to beginning
+                try {
+                    // Check if audio is already paused to avoid AbortError
+                    if (!this.currentAudio.paused) {
+                        this.currentAudio.pause();
+                    }
+                    this.currentAudio.currentTime = 0; // Reset to beginning
+
+                    // Clear event handlers to prevent them from firing
+                    this.currentAudio.onended = null;
+                    this.currentAudio.onerror = null;
+                    this.currentAudio.onpause = null;
+
+                    // Remove event listeners if they exist
+                    if (this.currentAudio._onEnded) {
+                        this.currentAudio.removeEventListener('ended', this.currentAudio._onEnded);
+                    }
+                    if (this.currentAudio._onError) {
+                        this.currentAudio.removeEventListener('error', this.currentAudio._onError);
+                    }
+                } catch (e) {
+                    // Ignore errors - audio might already be stopped
+                    console.warn('Error stopping audio (ignoring):', e);
+                }
                 this.currentAudio = null;
             }
 
             // Cancel any pending processing
             this.isProcessingAudio = false;
             this.isWaitingForResponse = false;
-            this.isPlayingTTS = false; // TTS is no longer playing
+            this.isPlayingTTS = false; // TTS is no longer playing - CRITICAL for interruption to work
+
+            // Hide any loading/thinking messages
+            this.hideLoading();
+            this.hideListeningMessage();
 
             // Don't clear voiceDetected if we just interrupted - we want to keep collecting
             // Only clear if we're not in the middle of an interruption
             if (!this.voiceDetected) {
                 this.audioBuffer = [];
+                this.lastHumanSpeechTime = null;
             }
             // voiceDetected stays true if we interrupted, so we continue collecting
 
-            // Restart silence timer if still recording
+            // Immediately start listening for user input after interruption
             if (this.isRecording && this.audioContext && this.audioContext.state === 'running') {
-                // Small delay to ensure audio processing resumes
+                // Small delay to ensure audio processing resumes and TTS flag is cleared
                 setTimeout(() => {
+                    // Double-check TTS is stopped
+                    if (this.currentAudio) {
+                        try {
+                            if (!this.currentAudio.paused) {
+                                this.currentAudio.pause();
+                            }
+                        } catch (e) {
+                            // Ignore errors
+                        }
+                        this.currentAudio = null;
+                    }
+                    this.isPlayingTTS = false; // Ensure flag is cleared
+
+                    // Start silence timer to listen for user input
                     this.startSilenceTimer();
                     console.log('🔄 Recording restarted after interruption - ready for user input');
-                }, 100);
+                }, 50); // Reduced delay for faster response
             }
         }
 
@@ -3531,11 +3582,17 @@
                 const audio = new Audio(audioUrl);
                 this.currentAudio = audio;
 
-                // Handle user interruption during playback
+                // Store references for cleanup
+                audio._onEnded = audio.onended;
+                audio._onError = audio.onerror;
+
+                // Handle user interruption during playback - pause event
                 audio.addEventListener('pause', () => {
-                    if (this.isPlayingTTS && this.currentAudio && this.currentAudio.paused) {
-                        console.log('🛑 TTS playback paused by user interruption');
+                    if (this.isPlayingTTS) {
+                        console.log('🛑 TTS playback paused - marking as interrupted');
                         this.isPlayingTTS = false;
+                        // Don't call cancelProcessing here to avoid double-processing
+                        // The audio processor will detect the interruption
                     }
                 });
 
@@ -3556,9 +3613,17 @@
                 };
 
                 audio.play().catch(error => {
-                    console.error('Error starting audio playback:', error);
-                    this.isPlayingTTS = false; // Failed to play, mark as not playing
-                    reject(error);
+                    // Handle AbortError gracefully - it means audio was interrupted by pause()
+                    if (error.name === 'AbortError' || error.message?.includes('interrupted') || error.message?.includes('pause')) {
+                        console.log('🔇 Audio playback was interrupted (user spoke) - this is expected');
+                        this.isPlayingTTS = false;
+                        // Don't reject - this is a valid interruption, resolve instead
+                        resolve();
+                    } else {
+                        console.error('Error starting audio playback:', error);
+                        this.isPlayingTTS = false; // Failed to play, mark as not playing
+                        reject(error);
+                    }
                 });
             });
         }
