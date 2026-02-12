@@ -103,10 +103,10 @@ class GroqSTT:
                 transcription = self.client.audio.transcriptions.create(
                     file=audio,
                     model=self.model,
-                    language=language,
+                    language="en",
                     prompt=prompt,
                     response_format=response_format,
-                    temperature=temperature,
+                    temperature=0.0
                 )
 
             if response_format in ["json", "verbose_json"]:
@@ -231,7 +231,7 @@ if __name__ == "__main__":
 
     try:
         stt = GroqSTT()
-        transcript = stt.transcribe(audio_file, language=language)
+        transcript = stt.transcribe(audio_file,language="en", temperature=0.0)
         print(f"Transcription: {transcript}")
     except Exception as e:
         print(f"Error: {e}")

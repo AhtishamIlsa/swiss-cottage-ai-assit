@@ -237,3 +237,4 @@ async def synthesize_speech(text: str):
 - [Groq API Documentation](https://console.groq.com/docs)
 - [Example Usage](example_usage.py)
 
+

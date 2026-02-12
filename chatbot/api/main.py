@@ -5716,7 +5716,7 @@ async def websocket_voice_conversation(websocket: WebSocket):
                             logger.info(f"📁 Saved WAV file: {tmp_audio_path}, size: {os.path.getsize(tmp_audio_path)} bytes")
                             
                             # Transcribe the WAV file
-                            transcribed_text = stt.transcribe(tmp_audio_path)
+                            transcribed_text = stt.transcribe(tmp_audio_path, language="en", temperature=0.0)
                             print(f"🎤 STT Transcribed text: {transcribed_text}")
                             
                         except Exception as file_error:
