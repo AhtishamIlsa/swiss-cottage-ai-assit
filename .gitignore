@@ -31,6 +31,19 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# Nginx cache and temporary files
+nginx/cache/
+nginx/tmp/
+nginx/proxy_temp/
+nginx/client_body_temp/
+nginx/fastcgi_temp/
+nginx/uwsgi_temp/
+nginx/scgi_temp/
+*.tmp
 
 # FAQ documentation files (generated)
 docs/faq/
