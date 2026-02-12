@@ -41,7 +41,7 @@ class IntentType(Enum):
     UNKNOWN = "unknown"
     # Manager-style intents
     PRICING = "pricing"  # Pricing queries
-    ROOMS = "rooms"  # Room/cottage queries
+    ROOMS = "rooms"  # Cottage queries (users ask about cottages, not rooms)
     SAFETY = "safety"  # Safety/security queries
     BOOKING = "booking"  # Booking intent (different from booking request)
     AVAILABILITY = "availability"  # Availability queries
@@ -113,6 +113,9 @@ class IntentRouter:
             "booking", "book", "reservation",
             "payment", "pay", "methods",
             "availability", "available",
+            "cottage", "room", "bedroom", "property", "accommodation",  # Add cottage-related keywords
+            "attraction", "nearby", "surrounding",  # Add location-related keywords
+            "safety", "security", "safe", "secure",  # Add safety keywords
         ]
         
     
@@ -307,9 +310,14 @@ class IntentRouter:
                 if any(keyword in query_lower for keyword in availability_keywords):
                     return IntentType.AVAILABILITY
                 
-                # Rooms/Properties intent
-                rooms_keywords = ["cottage", "room", "bedroom", "property", "accommodation", "space"]
-                if any(keyword in query_lower for keyword in rooms_keywords):
+                # Safety intent - CHECK BEFORE ROOMS (safety queries often mention "cottage")
+                safety_keywords = ["safety", "security", "safe", "secure", "emergency", "first aid", "medical"]
+                if any(keyword in query_lower for keyword in safety_keywords):
+                    return IntentType.SAFETY
+                
+                # Cottages/Properties intent (users ask about cottages, not rooms)
+                cottage_keywords = ["cottage", "property", "accommodation", "space"]
+                if any(keyword in query_lower for keyword in cottage_keywords):
                     return IntentType.ROOMS
                 
                 # Facilities intent
@@ -321,11 +329,6 @@ class IntentRouter:
                 location_keywords = ["location", "address", "where", "nearby", "surrounding", "area", "place"]
                 if any(keyword in query_lower for keyword in location_keywords):
                     return IntentType.LOCATION
-                
-                # Safety intent
-                safety_keywords = ["safety", "security", "safe", "secure", "emergency", "first aid", "medical"]
-                if any(keyword in query_lower for keyword in safety_keywords):
-                    return IntentType.SAFETY
                 
                 # Default to FAQ_QUESTION if topic keyword found but no specific intent matched
                 return None  # Let it fall through to FAQ_QUESTION
@@ -542,7 +545,7 @@ class IntentRouter:
         
         # Facilities questions - only ask if truly vague
         if any(word in query_lower for word in ["facilities", "amenities", "what is available", "what do you have"]):
-            has_specific = any(word in query_lower for word in ["cottage", "room", "kitchen", "parking", "bbq", "wifi", "available", "what"])
+            has_specific = any(word in query_lower for word in ["cottage", "kitchen", "parking", "bbq", "wifi", "available", "what"])
             if not has_specific and len(words) > 1 and len(words) <= 3:
                 return True
         
@@ -565,7 +568,7 @@ class IntentRouter:
 - pricing: Questions about prices, rates, costs, payments
 - booking: Questions about booking process, reservations
 - availability: Questions about availability, dates, vacancies
-- rooms: Questions about cottages, rooms, properties, accommodation
+- rooms: Questions about cottages, properties, accommodation
 - facilities: Questions about amenities, features, what's available
 - location: Questions about location, address, nearby places
 - safety: Questions about safety, security, emergencies
@@ -576,7 +579,7 @@ CRITICAL RULES:
 1. If the query asks about prices/rates/costs/payments, it's PRICING
 2. If the query asks about booking/reservation process, it's BOOKING
 3. If the query asks about availability/dates/vacancies, it's AVAILABILITY
-4. If the query asks about cottages/rooms/properties, it's ROOMS
+4. If the query asks about cottages/properties, it's ROOMS
 5. If the query asks about amenities/facilities/features, it's FACILITIES
 6. If the query asks about location/address/nearby, it's LOCATION
 7. If the query asks about safety/security/emergencies, it's SAFETY
@@ -625,7 +628,7 @@ Respond with ONLY the category name:"""
                 return IntentType.BOOKING
             elif "availability" in classification_lower:
                 return IntentType.AVAILABILITY
-            elif "room" in classification_lower or "cottage" in classification_lower:
+            elif "cottage" in classification_lower:
                 return IntentType.ROOMS
             elif "facilit" in classification_lower or "amenit" in classification_lower:
                 return IntentType.FACILITIES

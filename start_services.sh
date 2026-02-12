@@ -42,11 +42,20 @@ else
     FASTAPI_PID=$!
     echo "   FastAPI started (PID: $FASTAPI_PID)"
     echo "   Logs: /tmp/fastapi.log"
-    sleep 3
     
-    # Verify it started
+    # Wait longer for FastAPI to fully initialize (models, vector store, etc.)
+    echo "   ⏳ Waiting for FastAPI to initialize..."
+    sleep 8
+    
+    # Verify it started - check both port and HTTP response
     if check_port 8000; then
-        echo "   ✅ FastAPI is running"
+        # Also check if it responds to HTTP requests
+        if curl -s http://localhost:8000/docs > /dev/null 2>&1; then
+            echo "   ✅ FastAPI is running and responding"
+        else
+            echo "   ⚠️  FastAPI port is open but not responding yet (may still be initializing)"
+            echo "   💡 Check logs: tail -f /tmp/fastapi.log"
+        fi
     else
         echo "   ❌ FastAPI failed to start. Check logs: /tmp/fastapi.log"
         tail -20 /tmp/fastapi.log

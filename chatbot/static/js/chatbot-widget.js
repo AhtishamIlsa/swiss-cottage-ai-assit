@@ -256,6 +256,9 @@
         }
 
         fillPromptFromCard(text, intent = null) {
+            // Convert recommendation text to natural query
+            let optimizedQuery = this.normalizeRecommendationToQuery(text);
+            
             // Map card prompts to optimized queries that trigger specific intents
             const queryMap = {
                 "Check availability & book a cottage": "I want to check availability and book a cottage for my dates",
@@ -263,10 +266,10 @@
                 "Prices & cottage options": "What are the prices and cottage options? Compare weekday and weekend rates",
                 "Location & nearby attractions": "Tell me about the location and nearby attractions near Swiss Cottages Bhurban"
             };
-
-            // Use optimized query if available, otherwise use original text
-            const optimizedQuery = queryMap[text] || text;
-
+            
+            // Use queryMap if available, otherwise use normalized query
+            optimizedQuery = queryMap[text] || optimizedQuery;
+            
             const input = document.getElementById('chatbot-input');
             if (input) {
                 input.value = optimizedQuery;
@@ -281,7 +284,112 @@
                 input.style.height = Math.min(input.scrollHeight, 200) + 'px';
             }
         }
-
+        
+        normalizeRecommendationToQuery(recommendationText) {
+            /**
+             * Convert recommendation text into a natural query.
+             * Examples:
+             * - "Would you like to know more about amenities?" → "tell me about amenities"
+             * - "Show me pictures of Cottage 9" → "show me pictures of cottage 9"
+             * - "What's the pricing per night?" → "what's the pricing per night"
+             */
+            let query = recommendationText.trim();
+            
+            // Remove common recommendation prefixes
+            const prefixes = [
+                /^would you like to know more about/i,
+                /^would you like to/i,
+                /^are you looking for/i,
+                /^are you interested in/i,
+                /^do you want to know/i,
+                /^want to know/i,
+                /^interested in/i
+            ];
+            
+            for (const prefix of prefixes) {
+                if (prefix.test(query)) {
+                    // Extract the topic after the prefix
+                    query = query.replace(prefix, '').trim();
+                    // Remove trailing question marks and periods
+                    query = query.replace(/[?.]$/, '').trim();
+                    
+                    // Convert to natural query format
+                    if (query.toLowerCase().startsWith('the ')) {
+                        query = query.substring(4);
+                    }
+                    if (query.toLowerCase().startsWith('about ')) {
+                        query = query.substring(6);
+                    }
+                    
+                    // Add "tell me about" or "what" prefix if it's a topic
+                    const topicKeywords = ['amenities', 'facilities', 'services', 'options', 'attractions', 'safety', 'kitchen', 'pricing', 'prices'];
+                    const isTopic = topicKeywords.some(keyword => query.toLowerCase().includes(keyword));
+                    
+                    if (isTopic && !query.toLowerCase().startsWith('tell me') && !query.toLowerCase().startsWith('what') && !query.toLowerCase().startsWith('show me')) {
+                        query = `tell me about ${query}`;
+                    }
+                    break;
+                }
+            }
+            
+            // Handle questions that start with "What's" or "What are"
+            if (/^what'?s?\s+(the\s+)?/i.test(query)) {
+                // Keep as is - it's already a question
+                return query;
+            }
+            
+            // Handle "Show me" - keep as is
+            if (/^show me/i.test(query)) {
+                return query;
+            }
+            
+            // Handle statements that should become questions
+            // CRITICAL: Don't add "tell me about" to queries that start with "I want" or "I need"
+            if (!query.endsWith('?') && !/^(tell me|what|show me|where|how|is|are|do|can|i want|i need)/i.test(query)) {
+                // If it's a statement, convert to question
+                if (query.toLowerCase().includes('pricing') || query.toLowerCase().includes('price')) {
+                    query = `what's the ${query}`;
+                } else if (query.toLowerCase().includes('available') || query.toLowerCase().includes('availability')) {
+                    query = `tell me about ${query}`;
+                } else {
+                    query = `tell me about ${query}`;
+                }
+            }
+            
+            // Clean up: remove "such as" clauses and extra details
+            query = query.replace(/\s*,?\s*such as[^?]*/gi, '');
+            query = query.replace(/\s*,?\s*like[^?]*/gi, '');
+            query = query.replace(/\s*,?\s*for example[^?]*/gi, '');
+            
+            // Remove mentions of things not in FAQ (spa, gym, pool, etc.)
+            const unavailableTerms = [
+                /\s*(?:or|and)\s+spa\s+facilities?/gi,
+                /spa\s+facilities?/gi,
+                /\s*(?:or|and)\s+dining\s+options?/gi,  // "dining options" is vague - use "chef services" or "kitchen" instead
+                /\s*(?:or|and)\s+services?/gi  // Too vague
+            ];
+            
+            for (const pattern of unavailableTerms) {
+                query = query.replace(pattern, '');
+            }
+            
+            // If query mentions "amenities and services" or similar, simplify to just "amenities" or "facilities"
+            query = query.replace(/amenities\s+and\s+services/gi, 'amenities');
+            query = query.replace(/services\s+and\s+amenities/gi, 'amenities');
+            query = query.replace(/\s+and\s+services/gi, '');
+            
+            // Clean up multiple spaces
+            query = query.replace(/\s+/g, ' ').trim();
+            
+            // Final cleanup
+            query = query.trim();
+            if (!query.endsWith('?') && !query.endsWith('.')) {
+                query = query + '?';
+            }
+            
+            return query;
+        }
+        
         async restartConversation() {
             // Clear backend session
             await this.clearBackendSession(this.sessionId);
@@ -973,8 +1081,13 @@
                                     const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
                                     fullUrl = `${baseUrl}${imgUrl}`;
                                 }
-
-                                messageHTML += `<img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                                
+                                messageHTML += `<div class="chatbot-image-wrapper">
+                                    <div class="chatbot-image-loader">
+                                        <div class="chatbot-spinner"></div>
+                                    </div>
+                                    <img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
+                                </div>`;
                             });
 
                             messageHTML += '</div>'; // chatbot-image-gallery
@@ -1013,8 +1126,13 @@
                         }
 
                         console.log(`Image [${index}]: Original="${imgUrl}", Full="${fullUrl}"`);
-
-                        messageHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                        
+                        messageHTML += `<div class="chatbot-image-wrapper">
+                            <div class="chatbot-image-loader">
+                                <div class="chatbot-spinner"></div>
+                            </div>
+                            <img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
+                        </div>`;
                     });
                     messageHTML += '</div>'; // chatbot-image-gallery
                 }
@@ -1025,27 +1143,11 @@
             messageDiv.innerHTML = messageHTML;
             messagesContainer.appendChild(messageDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-            // Initialize slider if images were added
-            if (images && images.length > 0) {
-                const slider = messageDiv.querySelector('.chatbot-image-slider');
-                if (slider && slider.id) {
-                    // Use setTimeout to ensure DOM is ready
-                    setTimeout(() => {
-                        this.initImageSlider(slider.id);
-                    }, 100);
-                }
-            }
-
-            // Message already added to array above to prevent duplicates
-
-            // Remove from pending after successfully adding (with delay to catch rapid duplicates)
-            // Keep it in pending for 2 seconds to prevent rapid duplicates
-            setTimeout(() => {
-                if (this.pendingMessages) {
-                    this.pendingMessages.delete(messageKey);
-                }
-            }, 2000);
+            
+            // Add click handlers to images for fullscreen viewing
+            this.attachImageClickHandlers(messageDiv);
+            
+            this.messages.push({ role, content });
         }
 
         initImageSlider(sliderId) {
@@ -1149,7 +1251,7 @@
 
         formatMessage(text) {
             // Simple markdown-like formatting
-            return text
+            let formatted = text
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em>$1</em>')
                 .replace(/\n/g, '<br>')
@@ -1157,6 +1259,43 @@
                 .replace(/❌/g, '❌')
                 .replace(/👋/g, '👋')
                 .replace(/🏡/g, '🏡');
+            
+            // Format links with icons
+            // Pattern: Location: [text](url) or Location: text (url)
+            formatted = formatted.replace(/Location:\s*([^\n<]+?)\s*(?:\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\))/gi, (match, text, url1, text2, url2) => {
+                const linkText = text2 || text.trim();
+                const linkUrl = url2 || url1 || text.trim();
+                return `<div class="chatbot-link-item">
+                    <span class="chatbot-link-icon">📍</span>
+                    <span class="chatbot-link-label">Location:</span>
+                    <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${linkText}</a>
+                </div>`;
+            });
+            
+            // Pattern: More Info: [text](url) or More Info: text (url) or View property details
+            formatted = formatted.replace(/(?:More Info|View property details|View on|View|Details):\s*([^\n<]+?)\s*(?:\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\))/gi, (match, text, url1, text2, url2) => {
+                const linkText = text2 || text.trim();
+                const linkUrl = url2 || url1 || text.trim();
+                return `<div class="chatbot-link-item">
+                    <span class="chatbot-link-icon">🔗</span>
+                    <span class="chatbot-link-label">More Info:</span>
+                    <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${linkText}</a>
+                </div>`;
+            });
+            
+            // Pattern: Any URL (http/https) not already in a link
+            formatted = formatted.replace(/(?<!href=["'])(?<!<a[^>]*>)(https?:\/\/[^\s<>"']+)/gi, (match, url) => {
+                // Check if it's already inside a link tag
+                if (match.includes('<a') || match.includes('</a>')) {
+                    return match;
+                }
+                return `<div class="chatbot-link-item">
+                    <span class="chatbot-link-icon">🔗</span>
+                    <a href="${url}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${url}</a>
+                </div>`;
+            });
+            
+            return formatted;
         }
 
 
@@ -1166,30 +1305,10 @@
             // Create actions container
             const actionsContainer = document.createElement('div');
             actionsContainer.className = 'chatbot-follow-up-actions';
-
-            // Add quick action buttons
-            if (followUpActions.quick_actions && followUpActions.quick_actions.length > 0) {
-                const quickActionsDiv = document.createElement('div');
-                quickActionsDiv.className = 'chatbot-quick-actions';
-
-                followUpActions.quick_actions.forEach(action => {
-                    const button = document.createElement('button');
-                    button.className = 'chatbot-quick-action-btn';
-                    button.textContent = action.text;
-                    button.setAttribute('data-action', action.action);
-                    button.setAttribute('type', 'button');
-
-                    // Handle button click
-                    button.addEventListener('click', () => {
-                        this.handleQuickAction(action);
-                    });
-
-                    quickActionsDiv.appendChild(button);
-                });
-
-                actionsContainer.appendChild(quickActionsDiv);
-            }
-
+            
+            // Skip quick action buttons in widget (removed per user request)
+            // Quick action buttons are not shown in the widget
+            
             // Add suggestion chips
             if (followUpActions.suggestions && followUpActions.suggestions.length > 0) {
                 const suggestionsDiv = document.createElement('div');
@@ -1320,7 +1439,290 @@
                 searchingDiv.remove();
             }
         }
-
+        
+        attachImageClickHandlers(messageDiv) {
+            if (!messageDiv) return;
+            
+            // Wait a bit for images to be in DOM
+            setTimeout(() => {
+                const images = messageDiv.querySelectorAll('.chatbot-cottage-image');
+                if (images.length === 0) {
+                    console.log('No images found in messageDiv');
+                    return;
+                }
+                
+                console.log(`Found ${images.length} images, attaching click handlers`);
+                
+                // Collect all images from the same message (for navigation)
+                const imageArray = Array.from(images);
+                
+            imageArray.forEach((img, index) => {
+                img.style.cursor = 'pointer';
+                
+                // Remove any existing click handlers by cloning
+                const newImg = img.cloneNode(true);
+                if (img.parentNode) {
+                    img.parentNode.replaceChild(newImg, img);
+                }
+                
+                newImg.style.cursor = 'pointer';
+                newImg.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    console.log('Image clicked:', newImg.src, 'Index:', index);
+                    
+                    // Get all image sources from the array
+                    const allImageSrcs = imageArray.map(i => {
+                        const src = i.src || (typeof i === 'string' ? i : null);
+                        return src;
+                    }).filter(Boolean);
+                    
+                    this.openImageFullscreen(newImg.src, allImageSrcs, index);
+                });
+            });
+            }, 100);
+        }
+        
+        openImageFullscreen(imageSrc, imageArray, currentIndex) {
+            console.log('Opening fullscreen:', imageSrc, 'Array length:', imageArray.length, 'Index:', currentIndex);
+            
+            // Get widget elements
+            const chatWindow = document.getElementById('chatbot-window');
+            const messagesContainer = document.getElementById('chatbot-messages');
+            
+            if (!chatWindow) {
+                console.error('Chatbot window not found!');
+                return;
+            }
+            
+            // Extract src from image elements if they're DOM elements
+            const imageSrcs = imageArray.map(img => {
+                if (typeof img === 'string') return img;
+                return img.src || img;
+            });
+            
+            console.log('Image sources:', imageSrcs);
+            
+            // Get widget container
+            const widget = document.getElementById('chatbot-widget');
+            
+            // Store original widget state
+            const originalWindowStyle = {
+                position: chatWindow.style.position || '',
+                top: chatWindow.style.top || '',
+                left: chatWindow.style.left || '',
+                right: chatWindow.style.right || '',
+                bottom: chatWindow.style.bottom || '',
+                width: chatWindow.style.width || '',
+                height: chatWindow.style.height || '',
+                maxWidth: chatWindow.style.maxWidth || '',
+                maxHeight: chatWindow.style.maxHeight || '',
+                borderRadius: chatWindow.style.borderRadius || '',
+                zIndex: chatWindow.style.zIndex || ''
+            };
+            
+            // Store original widget class state
+            const hadFullscreenClass = widget ? widget.classList.contains('chatbot-fullscreen-active') : false;
+            
+            // Ensure chat window has relative positioning for absolute overlay
+            const originalChatWindowPosition = chatWindow.style.position || '';
+            if (!originalChatWindowPosition || originalChatWindowPosition === 'static') {
+                chatWindow.style.position = 'relative';
+            }
+            
+            // Create fullscreen overlay (absolute within chat window, not viewport)
+            const overlay = document.createElement('div');
+            overlay.className = 'chatbot-image-fullscreen-overlay';
+            overlay.innerHTML = `
+                <div class="chatbot-image-fullscreen-container">
+                    <button class="chatbot-image-fullscreen-close" aria-label="Close" title="Close (Esc)">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                    ${imageSrcs.length > 1 ? `
+                        <button class="chatbot-image-fullscreen-prev" aria-label="Previous" title="Previous (←)">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="15 18 9 12 15 6"></polyline>
+                            </svg>
+                        </button>
+                        <button class="chatbot-image-fullscreen-next" aria-label="Next" title="Next (→)">
+                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </button>
+                    ` : ''}
+                    <div class="chatbot-image-fullscreen-content">
+                        <img src="${imageSrc}" alt="Fullscreen image" class="chatbot-image-fullscreen-img" />
+                        ${imageSrcs.length > 1 ? `
+                            <div class="chatbot-image-fullscreen-counter">
+                                ${currentIndex + 1} / ${imageSrcs.length}
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            
+            // Overlay styles (absolute within chat window, covers entire widget)
+            overlay.style.cssText = `
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                height: 100% !important;
+                background-color: rgba(0, 0, 0, 0.95) !important;
+                z-index: 100000000 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                opacity: 0 !important;
+                transition: opacity 0.3s ease !important;
+                cursor: pointer !important;
+                visibility: visible !important;
+            `;
+            
+            // Store original state for restoration
+            overlay._originalWindowStyle = originalWindowStyle;
+            overlay._originalChatWindowPosition = originalChatWindowPosition;
+            overlay._chatWindow = chatWindow;
+            overlay._messagesContainer = messagesContainer;
+            overlay._hadFullscreenClass = hadFullscreenClass;
+            overlay._widget = widget;
+            
+            // Append to chat window (absolute positioning relative to widget)
+            chatWindow.appendChild(overlay);
+            console.log('Overlay added to chat window');
+            
+            // Close button
+            const closeBtn = overlay.querySelector('.chatbot-image-fullscreen-close');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    console.log('Close button clicked');
+                    this.closeImageFullscreen(overlay);
+                });
+            } else {
+                console.error('Close button not found!');
+            }
+            
+            // Close on overlay click (but not on image or buttons)
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay || e.target.classList.contains('chatbot-image-fullscreen-container')) {
+                    console.log('Overlay clicked, closing');
+                    this.closeImageFullscreen(overlay);
+                }
+            });
+            
+            // Close on Escape key
+            const escapeHandler = (e) => {
+                if (e.key === 'Escape') {
+                    console.log('Escape pressed, closing');
+                    this.closeImageFullscreen(overlay);
+                    document.removeEventListener('keydown', escapeHandler);
+                }
+            };
+            document.addEventListener('keydown', escapeHandler);
+            overlay._escapeHandler = escapeHandler;
+            
+            // Navigation (if multiple images)
+            if (imageSrcs.length > 1) {
+                let currentIdx = currentIndex;
+                const fullscreenImg = overlay.querySelector('.chatbot-image-fullscreen-img');
+                const counter = overlay.querySelector('.chatbot-image-fullscreen-counter');
+                
+                const updateImage = (newIndex) => {
+                    currentIdx = newIndex;
+                    if (currentIdx < 0) currentIdx = imageSrcs.length - 1;
+                    if (currentIdx >= imageSrcs.length) currentIdx = 0;
+                    
+                    if (fullscreenImg && imageSrcs[currentIdx]) {
+                        fullscreenImg.src = imageSrcs[currentIdx];
+                    }
+                    if (counter) {
+                        counter.textContent = `${currentIdx + 1} / ${imageSrcs.length}`;
+                    }
+                };
+                
+                const prevBtn = overlay.querySelector('.chatbot-image-fullscreen-prev');
+                const nextBtn = overlay.querySelector('.chatbot-image-fullscreen-next');
+                
+                prevBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    updateImage(currentIdx - 1);
+                });
+                
+                nextBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    updateImage(currentIdx + 1);
+                });
+                
+                // Keyboard navigation
+                const keyHandler = (e) => {
+                    if (e.key === 'ArrowLeft') {
+                        e.preventDefault();
+                        updateImage(currentIdx - 1);
+                    } else if (e.key === 'ArrowRight') {
+                        e.preventDefault();
+                        updateImage(currentIdx + 1);
+                    }
+                };
+                document.addEventListener('keydown', keyHandler);
+                
+                // Store handler for cleanup
+                overlay._keyHandler = keyHandler;
+            }
+            
+            // Fade in animation
+            setTimeout(() => {
+                overlay.classList.add('active');
+                overlay.style.opacity = '1';
+                console.log('Overlay should be visible now');
+                console.log('Overlay element:', overlay);
+                console.log('Overlay computed display:', window.getComputedStyle(overlay).display);
+                console.log('Overlay computed z-index:', window.getComputedStyle(overlay).zIndex);
+                console.log('Overlay computed opacity:', window.getComputedStyle(overlay).opacity);
+                console.log('Overlay computed visibility:', window.getComputedStyle(overlay).visibility);
+            }, 10);
+        }
+        
+        closeImageFullscreen(overlay) {
+            overlay.classList.remove('active');
+            overlay.style.opacity = '0';
+            
+            setTimeout(() => {
+                // Remove event listeners
+                if (overlay._keyHandler) {
+                    document.removeEventListener('keydown', overlay._keyHandler);
+                }
+                if (overlay._escapeHandler) {
+                    document.removeEventListener('keydown', overlay._escapeHandler);
+                }
+                
+                // Restore chat window position if we changed it
+                if (overlay._chatWindow && overlay._originalChatWindowPosition !== undefined) {
+                    const chatWindow = overlay._chatWindow;
+                    if (overlay._originalChatWindowPosition === '' || overlay._originalChatWindowPosition === 'static') {
+                        // Only restore if we actually changed it
+                        chatWindow.style.position = overlay._originalChatWindowPosition || '';
+                    }
+                }
+                
+                // Restore chat scroll
+                if (overlay._messagesContainer) {
+                    overlay._messagesContainer.style.overflow = '';
+                }
+                
+                // Remove overlay
+                if (overlay && overlay.parentNode) {
+                    overlay.remove();
+                }
+                
+                console.log('Image fullscreen closed, widget state restored');
+            }, 300);
+        }
+        
         createSourcesDiv(sources) {
             const sourcesDiv = document.createElement('div');
             sourcesDiv.className = 'chatbot-sources';
@@ -1385,8 +1787,13 @@
                                 const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
                                 fullUrl = `${baseUrl}${imgUrl}`;
                             }
-
-                            groupedHTML += `<img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                            
+                            groupedHTML += `<div class="chatbot-image-wrapper">
+                                <div class="chatbot-image-loader">
+                                    <div class="chatbot-spinner"></div>
+                                </div>
+                                <img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
+                            </div>`;
                         });
 
                         groupedHTML += '</div>'; // chatbot-image-gallery
@@ -1395,6 +1802,9 @@
                 });
 
                 messageDiv.insertAdjacentHTML('beforeend', groupedHTML);
+                
+                // Add click handlers to images for fullscreen viewing
+                setTimeout(() => this.attachImageClickHandlers(messageDiv), 0);
                 return;
             }
 
@@ -1415,12 +1825,20 @@
                     const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
                     fullUrl = `${baseUrl}${imgUrl}`;
                 }
-
-                galleryHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
+                
+                galleryHTML += `<div class="chatbot-image-wrapper">
+                    <div class="chatbot-image-loader">
+                        <div class="chatbot-spinner"></div>
+                    </div>
+                    <img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
+                </div>`;
             });
             galleryHTML += '</div>';
 
             messageDiv.insertAdjacentHTML('beforeend', galleryHTML);
+            
+            // Add click handlers to images for fullscreen viewing
+            setTimeout(() => this.attachImageClickHandlers(messageDiv), 0);
         }
 
         async sendMessage(questionOverride = null) {

@@ -134,6 +134,7 @@ class GroqClient:
         stop_sequences = ["\n\n\n", "---", "###", "##"]
         
         try:
+            logger.info(f"🔧 Creating Groq stream with max_tokens={max_new_tokens}, model={self.model_name}, prompt_length={len(prompt)}")
             stream = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
@@ -145,6 +146,7 @@ class GroqClient:
                 stream=True,
                 stop=stop_sequences,
             )
+            logger.info(f"✅ Groq stream created successfully with max_tokens={max_new_tokens}")
             logger.debug(f"Created Groq stream for prompt (length: {len(prompt)} chars)")
             import sys
             print(f"[GROQ_API] Created Groq stream for model: {self.model_name}, prompt length: {len(prompt)}", file=sys.stderr, flush=True)
@@ -191,7 +193,11 @@ class GroqClient:
                         
                         # Check for finish_reason - if present and not None, this might be the last chunk
                         finish_reason = getattr(choice, 'finish_reason', None)
-                        if finish_reason and chunk_count <= 3:
+                        if finish_reason:
+                            logger.warning(f"⚠️ Chunk {chunk_count} has finish_reason: {finish_reason} - Stream may be ending early!")
+                            if finish_reason == "stop" and chunk_count < 100:
+                                logger.error(f"🚨 EARLY STOP DETECTED at chunk {chunk_count} with finish_reason='stop' - This may indicate stop sequence was hit or max_tokens limit reached")
+                        elif chunk_count <= 3:
                             logger.info(f"Chunk {chunk_count} has finish_reason: {finish_reason}")
                         
                         # Log choice structure for first few chunks

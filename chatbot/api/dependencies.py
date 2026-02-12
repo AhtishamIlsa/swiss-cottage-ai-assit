@@ -69,6 +69,21 @@ def is_query_optimization_enabled() -> bool:
     return os.getenv("ENABLE_QUERY_OPTIMIZATION", "true").lower() == "true"
 
 
+def is_intent_filtering_enabled() -> bool:
+    """
+    Check if intent-based filtering is enabled via environment variable.
+    
+    This controls whether the new intent-based architecture is used:
+    - Intent-based query optimization
+    - Metadata filtering in vector retrieval
+    - Intent-specific prompts
+    
+    Returns:
+        bool: True if intent filtering is enabled (default: True)
+    """
+    return os.getenv("USE_INTENT_FILTERING", "true").lower() == "true"
+
+
 def get_model_folder() -> Path:
     """Get the model folder path."""
     return get_root_folder() / "models"

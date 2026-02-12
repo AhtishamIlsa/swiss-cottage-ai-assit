@@ -75,6 +75,8 @@ class DateExtractor:
             # "from march 10 to march 14" or "march 10 to march 14" (month day to month day)
             # Also handles "from feb 13 to feb 19" format
             r"(?:from|arrival|check-in|starting|planning)?\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})\s+to\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})",
+            # "February 11, 2026, to February 15, 2026" (full format with year and commas - from bot responses)
+            r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),\s*(\d{2,4}),?\s+to\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s*(\d{2,4})?",
             # "from 4 feb to 9 feb" or "from 4 february to 9 february" (day to day month)
             # Also handles "if we stay from 5 feb to 15 feb"
             r"(?:from|arrival|check-in|starting|stay|staying)?\s*(\d{1,2})\s+to\s+(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|may|june|july|august|september|october|november|december)",
@@ -151,27 +153,63 @@ class DateExtractor:
                                 continue
                     
                     elif len(groups) == 6:
-                        # Pattern: "from 4/2/2024 to 9/2/2024"
-                        start_day = int(groups[0])
-                        start_month = int(groups[1])
-                        start_year = int(groups[2])
-                        end_day = int(groups[3])
-                        end_month = int(groups[4])
-                        end_year = int(groups[5])
+                        # Check if this is the "February 11, 2026, to February 15, 2026" format (month names)
+                        # or "from 4/2/2024 to 9/2/2024" format (numeric)
+                        start_month_str = groups[0].lower()
+                        start_day_str = groups[1]
+                        start_year_str = groups[2] if len(groups) > 2 else None
+                        end_month_str = groups[3].lower() if len(groups) > 3 else None
+                        end_day_str = groups[4] if len(groups) > 4 else None
+                        end_year_str = groups[5] if len(groups) > 5 else None
                         
-                        # Handle 2-digit years
-                        if start_year < 100:
-                            start_year += 2000
-                        if end_year < 100:
-                            end_year += 2000
-                        
-                        try:
-                            start_date = datetime(start_year, start_month, start_day)
-                            end_date = datetime(end_year, end_month, end_day)
-                            return self._calculate_date_details(start_date, end_date, query)
-                        except ValueError as e:
-                            logger.warning(f"Invalid date: {e}")
-                            continue
+                        # Check if first group is a month name (not a number)
+                        if start_month_str in self.MONTH_NAMES:
+                            # Pattern: "February 11, 2026, to February 15, 2026"
+                            start_month = self.MONTH_NAMES[start_month_str]
+                            start_day = int(start_day_str)
+                            start_year = int(start_year_str) if start_year_str else datetime.now().year
+                            
+                            if end_month_str and end_month_str in self.MONTH_NAMES:
+                                end_month = self.MONTH_NAMES[end_month_str]
+                                end_day = int(end_day_str) if end_day_str else start_day
+                                end_year = int(end_year_str) if end_year_str and end_year_str.strip() else start_year
+                                
+                                # Handle 2-digit years
+                                if start_year < 100:
+                                    start_year += 2000
+                                if end_year < 100:
+                                    end_year += 2000
+                                
+                                try:
+                                    start_date = datetime(start_year, start_month, start_day)
+                                    end_date = datetime(end_year, end_month, end_day)
+                                    logger.info(f"Extracted date range with year: {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}")
+                                    return self._calculate_date_details(start_date, end_date, query)
+                                except ValueError as e:
+                                    logger.warning(f"Invalid date: {e}")
+                                    continue
+                        else:
+                            # Pattern: "from 4/2/2024 to 9/2/2024" (numeric format)
+                            start_day = int(groups[0])
+                            start_month = int(groups[1])
+                            start_year = int(groups[2])
+                            end_day = int(groups[3])
+                            end_month = int(groups[4])
+                            end_year = int(groups[5])
+                            
+                            # Handle 2-digit years
+                            if start_year < 100:
+                                start_year += 2000
+                            if end_year < 100:
+                                end_year += 2000
+                            
+                            try:
+                                start_date = datetime(start_year, start_month, start_day)
+                                end_date = datetime(end_year, end_month, end_day)
+                                return self._calculate_date_details(start_date, end_date, query)
+                            except ValueError as e:
+                                logger.warning(f"Invalid date: {e}")
+                                continue
                     
                 except (ValueError, IndexError) as e:
                     logger.debug(f"Error parsing date pattern: {e}")
