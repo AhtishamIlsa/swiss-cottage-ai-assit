@@ -1130,6 +1130,62 @@ def fix_question_rephrasing(answer: str, question: str = "") -> str:
     return fixed_answer
 
 
+def detect_and_reject_wrong_location_answer(answer: str, query: str) -> Optional[str]:
+    """
+    Detect and reject clearly wrong location answers that are from training data.
+    Returns None if answer should be rejected, otherwise returns the answer.
+    """
+    if not answer or not query:
+        return answer
+    
+    answer_lower = answer.lower()
+    query_lower = query.lower()
+    
+    # Only check location queries
+    is_location_query = any(word in query_lower for word in ["where", "location", "located", "address"])
+    
+    if not is_location_query:
+        return answer
+    
+    # CRITICAL: Detect wrong answers that describe Bhurban as a general place
+    wrong_patterns = [
+        r"^bhurban\s+is\s+a\s+stunning",  # "Bhurban is a stunning hill station..."
+        r"^bhurban\s+is\s+a\s+popular",  # "Bhurban is a popular..."
+        r"^bhurban\s+is\s+.*?hill\s+station",  # "Bhurban is a hill station..."
+        r"bhurban\s+is\s+.*?picnic\s+spot",  # "Bhurban is a picnic spot..."
+        r"bhurban\s+is\s+.*?located\s+in.*?azad\s+kashmir",  # "Bhurban is located in Azad Kashmir"
+        r"bhurban\s+is\s+.*?near\s+abbottabad",  # "Bhurban is near Abbottabad"
+        r"located\s+in\s+the\s+beautiful\s+azad\s+kashmir\s+region",  # "located in the beautiful Azad Kashmir region"
+        r"azad\s+kashmir\s+region",  # "Azad Kashmir region"
+        r"near\s+abbottabad",  # "near Abbottabad"
+        r"abbottabad",  # "Abbottabad"
+    ]
+    
+    for pattern in wrong_patterns:
+        if re.search(pattern, answer_lower):
+            logger.error(f"REJECTED: Answer contains wrong location pattern: {pattern}")
+            logger.error(f"Wrong answer: {answer[:200]}...")
+            return None  # Reject this answer
+    
+    # Check if answer describes Bhurban as a general place (not Swiss Cottages)
+    # This catches patterns like "Bhurban is a stunning hill station..." or "Bhurban is a lovely picnic spot..."
+    if answer_lower.startswith("bhurban is") or answer_lower.startswith("bhurban is a") or answer_lower.startswith("bhurban is located"):
+        logger.error("REJECTED: Answer starts with 'Bhurban is...' - describes Bhurban as place, not Swiss Cottages location")
+        return None
+    
+    # Also check if answer starts with "Bhurban is" anywhere in first 50 chars
+    if "bhurban is" in answer_lower[:50] and "swiss cottages" not in answer_lower[:100]:
+        logger.error("REJECTED: Answer describes Bhurban as general place, not Swiss Cottages location")
+        return None
+    
+    # Check if answer doesn't mention Swiss Cottages at all (for location queries)
+    if "swiss cottages" not in answer_lower and "swiss cottage" not in answer_lower:
+        logger.warning("Answer doesn't mention Swiss Cottages - might be wrong")
+        # Don't reject, but log warning
+    
+    return answer
+
+
 def fix_incorrect_location_mentions(answer: str) -> str:
     """
     Fix incorrect location mentions in answers.
@@ -1179,15 +1235,39 @@ def fix_incorrect_location_mentions(answer: str) -> str:
                     fixed_answer += "\n\n[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
     
     # Additional aggressive check: if answer mentions "Azad Kashmir" in any context about Swiss Cottages location, replace it
-    if "azad kashmir" in answer_lower and ("swiss" in answer_lower or "cottage" in answer_lower or "location" in answer_lower or "located" in answer_lower or "bhurban" in answer_lower):
-        # Replace "Azad Kashmir" with "Murree Hills, Bhurban, Pakistan" when talking about Swiss Cottages
-        fixed_answer = re.sub(
-            r"\bazad\s+kashmir\b",
-            "Murree Hills, Bhurban, Pakistan",
-            fixed_answer,
-            flags=re.IGNORECASE
-        )
-        logger.warning("Replaced 'Azad Kashmir' with correct location in answer")
+    # This catches patterns like "Bhurban, Azad Kashmir", "located in Azad Kashmir", "in Azad Kashmir", etc.
+    if "azad kashmir" in answer_lower:
+        # Check if it's in a location context (not just mentioning viewpoints)
+        is_location_context = any(phrase in answer_lower for phrase in [
+            "swiss", "cottage", "location", "located", "bhurban", "in azad kashmir",
+            "azad kashmir, pakistan", "bhurban, azad kashmir", "gated community in"
+        ])
+        
+        # Check if it's NOT in the correct context (overlooking, viewpoint)
+        is_not_viewpoint_context = not any(phrase in answer_lower for phrase in [
+            "overlooking azad kashmir",
+            "viewpoint",
+            "viewpoints overlooking",
+            "scenic viewpoints",
+            "can see azad kashmir",
+            "visible from"
+        ])
+        
+        if is_location_context and is_not_viewpoint_context:
+            # Replace "Azad Kashmir" with "Murree Hills, Bhurban, Pakistan" when talking about Swiss Cottages location
+            # More aggressive patterns
+            replacement_patterns = [
+                (r"bhurban[^,.]*,\s*azad\s+kashmir", "Bhurban, Murree, Pakistan"),
+                (r"gated\s+community\s+in\s+bhurban[^,.]*,\s*azad\s+kashmir", "gated community in Bhurban, Murree, Pakistan"),
+                (r"located\s+within\s+a\s+gated\s+community\s+in\s+bhurban[^,.]*,\s*azad\s+kashmir", "located within a gated community in Bhurban, Murree, Pakistan"),
+                (r"in\s+bhurban[^,.]*,\s*azad\s+kashmir", "in Bhurban, Murree, Pakistan"),
+                (r"\bazad\s+kashmir\b", "Murree Hills, Bhurban, Pakistan"),  # Catch any remaining instances
+            ]
+            
+            for pattern, replacement in replacement_patterns:
+                if re.search(pattern, fixed_answer, flags=re.IGNORECASE):
+                    fixed_answer = re.sub(pattern, replacement, fixed_answer, flags=re.IGNORECASE)
+                    logger.warning(f"Replaced pattern '{pattern}' with correct location in answer")
         
         # Ensure Google Maps link is included for location answers
         if ("location" in answer_lower or "located" in answer_lower or "where" in answer_lower) and "goo.gl/maps" not in fixed_answer.lower():
@@ -1588,6 +1668,76 @@ def clean_answer_text(answer: str) -> str:
     cleaned = cleaned.strip()
     
     return cleaned
+
+
+def preprocess_context_for_location_clarity(
+    retrieved_contents: List["Document"]
+) -> List["Document"]:
+    """
+    Preprocess context documents to clarify location information.
+    Adds clarifying notes when "Azad Kashmir" appears in context to prevent LLM misinterpretation.
+    
+    CRITICAL: When context says "overlooking Azad Kashmir" or "Azad Kashmir View Point",
+    the LLM might misinterpret this as "located in Azad Kashmir". This function adds
+    clarifying notes to prevent this misinterpretation.
+    
+    Args:
+        retrieved_contents: List of retrieved documents
+    
+    Returns:
+        List of documents with clarifying notes added
+    """
+    from entities.document import Document
+    import re
+    
+    processed_docs = []
+    
+    for doc in retrieved_contents:
+        content = doc.page_content
+        content_lower = content.lower()
+        
+        # Check if document mentions "Azad Kashmir" in a way that might be misinterpreted
+        if "azad kashmir" in content_lower:
+            # Check if it's in the correct context (overlooking, viewpoint, etc.)
+            has_correct_context = any(phrase in content_lower for phrase in [
+                "overlooking azad kashmir",
+                "azad kashmir view",
+                "azad kashmir view point",
+                "viewpoints overlooking",
+                "scenic viewpoints",
+                "viewpoint near"
+            ])
+            
+            # Check if it might be misinterpreted as location (located in, in azad kashmir, etc.)
+            has_wrong_context = any(re.search(pattern, content_lower) for pattern in [
+                r"located\s+in\s+azad\s+kashmir",
+                r"\bin\s+azad\s+kashmir[^,.]",
+                r"azad\s+kashmir,\s+pakistan",
+                r"bhurban[^,]*,\s*azad\s+kashmir",
+                r"swiss\s+cottages.*azad\s+kashmir"
+            ])
+            
+            # If it has correct context (overlooking), add clarifying note
+            if has_correct_context and not has_wrong_context:
+                # Add clarifying note at the beginning of the document
+                clarification = (
+                    "[CLARIFICATION: When this document mentions 'Azad Kashmir' or 'overlooking Azad Kashmir', "
+                    "it means you can SEE Azad Kashmir from viewpoints or locations. "
+                    "Swiss Cottages is NOT located in Azad Kashmir. "
+                    "Swiss Cottages is located in Murree Hills, Bhurban, Pakistan. "
+                    "Azad Kashmir is a region that can be SEEN from viewpoints, but the cottages are NOT in Azad Kashmir.]\n\n"
+                )
+                content = clarification + content
+                logger.info("Added location clarification to context document mentioning Azad Kashmir")
+        
+        # Create new document with processed content
+        new_doc = Document(
+            page_content=content,
+            metadata=doc.metadata.copy() if hasattr(doc, 'metadata') else {}
+        )
+        processed_docs.append(new_doc)
+    
+    return processed_docs if processed_docs else retrieved_contents
 
 
 def inject_essential_info(
@@ -3552,6 +3702,8 @@ CONTACT INFORMATION:
                 if retrieved_contents:
                     # Inject essential info (capacity for cottage descriptions)
                     slots_dict = slot_manager.get_slots() if slot_manager else {}
+                    # CRITICAL: Preprocess context to clarify "Azad Kashmir" usage before sending to LLM
+                    retrieved_contents = preprocess_context_for_location_clarity(retrieved_contents)
                     retrieved_contents = inject_essential_info(retrieved_contents, request.question, slots_dict)
                     
                     # Filter pricing from context for non-pricing queries
@@ -3662,6 +3814,20 @@ CONTACT INFORMATION:
                 
                 # Fix question rephrasing
                 answer_text = fix_question_rephrasing(answer_text, request.question)
+                
+                # CRITICAL: Detect and reject clearly wrong location answers BEFORE fixing
+                rejected = detect_and_reject_wrong_location_answer(answer_text, request.question)
+                if rejected is None:
+                    # Answer was rejected - return error message
+                    logger.error("Rejected wrong location answer, returning error message")
+                    answer_text = (
+                        "I don't have accurate location information in my knowledge base for that query.\n\n"
+                        "Swiss Cottages Bhurban is located in Bhurban, Murree, Pakistan. "
+                        "For more details, please contact us directly.\n\n"
+                        "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+                    )
+                else:
+                    answer_text = rejected
                 
                 # Fix incorrect location mentions (Azad Kashmir, Patriata)
                 answer_text = fix_incorrect_location_mentions(answer_text)
@@ -4166,6 +4332,20 @@ CONTACT INFORMATION:
                 
                 # Fix question rephrasing
                 answer_text = fix_question_rephrasing(answer_text, request.question)
+                
+                # CRITICAL: Detect and reject clearly wrong location answers BEFORE fixing
+                rejected = detect_and_reject_wrong_location_answer(answer_text, request.question)
+                if rejected is None:
+                    # Answer was rejected - return error message
+                    logger.error("Rejected wrong location answer, returning error message")
+                    answer_text = (
+                        "I don't have accurate location information in my knowledge base for that query.\n\n"
+                        "Swiss Cottages Bhurban is located in Bhurban, Murree, Pakistan. "
+                        "For more details, please contact us directly.\n\n"
+                        "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+                    )
+                else:
+                    answer_text = rejected
                 
                 # Fix incorrect location mentions (Azad Kashmir, Patriata)
                 answer_text = fix_incorrect_location_mentions(answer_text)
@@ -5706,6 +5886,20 @@ To book {booking_cottages}:
                 
                 # Fix question rephrasing
                 full_answer = fix_question_rephrasing(full_answer, request.question)
+                
+                # CRITICAL: Detect and reject clearly wrong location answers BEFORE fixing
+                rejected = detect_and_reject_wrong_location_answer(full_answer, request.question)
+                if rejected is None:
+                    # Answer was rejected - return error message
+                    logger.error("Rejected wrong location answer in stream, returning error message")
+                    full_answer = (
+                        "I don't have accurate location information in my knowledge base for that query.\n\n"
+                        "Swiss Cottages Bhurban is located in Bhurban, Murree, Pakistan. "
+                        "For more details, please contact us directly.\n\n"
+                        "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+                    )
+                else:
+                    full_answer = rejected
                 
                 # Fix incorrect location mentions (Azad Kashmir, Patriata)
                 full_answer = fix_incorrect_location_mentions(full_answer)
