@@ -20,7 +20,6 @@
             this.isFullscreen = false;
             this.isLoading = false;
             this.messages = [];
-            this.pendingMessages = new Set(); // Track messages being added to prevent duplicates
 
             // Voice recording state
             this.isRecording = false;
@@ -37,7 +36,6 @@
             this.silenceTimer = null;
             this.currentAudio = null;
             this.voiceDetected = false; // Track if we've detected actual human voice
-            this.lastHumanSpeechTime = null; // Track when human speech was last detected
             this.mediaRecorderStopped = false; // Track if MediaRecorder has fully stopped
             this.pendingProcess = null; // Track pending process after stop
             this.recordingStartTime = null; // Track when recording started
@@ -51,6 +49,12 @@
             this.voiceHistory = []; // Track voice detection over time for temporal continuity
             this.fftAnalyzer = null; // FFT analyzer node for frequency analysis
             this.fftSize = 2048; // FFT size for frequency analysis
+
+            // Real-time speech recognition
+            this.speechRecognition = null;
+            this.realTimeTranscript = ''; // Current transcript being built
+            this.interimTranscript = ''; // Interim results from speech recognition
+            this.interruptionSpeechHistory = []; // Track speech detections for interruption (must be sustained)
 
             this.lastQuestion = null;
 
@@ -82,7 +86,10 @@
 
             // Clear any old session from backend when creating new session
             // This ensures backend doesn't have stale history
-            this.clearBackendSession(sessionId);
+            // Call asynchronously to not block initialization
+            this.clearBackendSession(sessionId).catch(() => {
+                // Ignore errors - this is just cleanup
+            });
 
             return sessionId;
         }
@@ -92,7 +99,7 @@
             // Use a dummy old session ID to clear any potential old sessions
             try {
                 // Try to clear any existing session (ignore errors if session doesn't exist)
-                await fetch(`${this.options.apiUrl}/api/chat/clear`, {
+                await fetch(`${this.apiUrl}/api/chat/clear`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -257,9 +264,6 @@
         }
 
         fillPromptFromCard(text, intent = null) {
-            // Convert recommendation text to natural query
-            let optimizedQuery = this.normalizeRecommendationToQuery(text);
-
             // Map card prompts to optimized queries that trigger specific intents
             const queryMap = {
                 "Check availability & book a cottage": "I want to check availability and book a cottage for my dates",
@@ -268,8 +272,8 @@
                 "Location & nearby attractions": "Tell me about the location and nearby attractions near Swiss Cottages Bhurban"
             };
 
-            // Use queryMap if available, otherwise use normalized query
-            optimizedQuery = queryMap[text] || optimizedQuery;
+            // Use optimized query if available, otherwise use original text
+            const optimizedQuery = queryMap[text] || text;
 
             const input = document.getElementById('chatbot-input');
             if (input) {
@@ -284,111 +288,6 @@
                 input.style.height = 'auto';
                 input.style.height = Math.min(input.scrollHeight, 200) + 'px';
             }
-        }
-
-        normalizeRecommendationToQuery(recommendationText) {
-            /**
-             * Convert recommendation text into a natural query.
-             * Examples:
-             * - "Would you like to know more about amenities?" → "tell me about amenities"
-             * - "Show me pictures of Cottage 9" → "show me pictures of cottage 9"
-             * - "What's the pricing per night?" → "what's the pricing per night"
-             */
-            let query = recommendationText.trim();
-
-            // Remove common recommendation prefixes
-            const prefixes = [
-                /^would you like to know more about/i,
-                /^would you like to/i,
-                /^are you looking for/i,
-                /^are you interested in/i,
-                /^do you want to know/i,
-                /^want to know/i,
-                /^interested in/i
-            ];
-
-            for (const prefix of prefixes) {
-                if (prefix.test(query)) {
-                    // Extract the topic after the prefix
-                    query = query.replace(prefix, '').trim();
-                    // Remove trailing question marks and periods
-                    query = query.replace(/[?.]$/, '').trim();
-
-                    // Convert to natural query format
-                    if (query.toLowerCase().startsWith('the ')) {
-                        query = query.substring(4);
-                    }
-                    if (query.toLowerCase().startsWith('about ')) {
-                        query = query.substring(6);
-                    }
-
-                    // Add "tell me about" or "what" prefix if it's a topic
-                    const topicKeywords = ['amenities', 'facilities', 'services', 'options', 'attractions', 'safety', 'kitchen', 'pricing', 'prices'];
-                    const isTopic = topicKeywords.some(keyword => query.toLowerCase().includes(keyword));
-
-                    if (isTopic && !query.toLowerCase().startsWith('tell me') && !query.toLowerCase().startsWith('what') && !query.toLowerCase().startsWith('show me')) {
-                        query = `tell me about ${query}`;
-                    }
-                    break;
-                }
-            }
-
-            // Handle questions that start with "What's" or "What are"
-            if (/^what'?s?\s+(the\s+)?/i.test(query)) {
-                // Keep as is - it's already a question
-                return query;
-            }
-
-            // Handle "Show me" - keep as is
-            if (/^show me/i.test(query)) {
-                return query;
-            }
-
-            // Handle statements that should become questions
-            // CRITICAL: Don't add "tell me about" to queries that start with "I want" or "I need"
-            if (!query.endsWith('?') && !/^(tell me|what|show me|where|how|is|are|do|can|i want|i need)/i.test(query)) {
-                // If it's a statement, convert to question
-                if (query.toLowerCase().includes('pricing') || query.toLowerCase().includes('price')) {
-                    query = `what's the ${query}`;
-                } else if (query.toLowerCase().includes('available') || query.toLowerCase().includes('availability')) {
-                    query = `tell me about ${query}`;
-                } else {
-                    query = `tell me about ${query}`;
-                }
-            }
-
-            // Clean up: remove "such as" clauses and extra details
-            query = query.replace(/\s*,?\s*such as[^?]*/gi, '');
-            query = query.replace(/\s*,?\s*like[^?]*/gi, '');
-            query = query.replace(/\s*,?\s*for example[^?]*/gi, '');
-
-            // Remove mentions of things not in FAQ (spa, gym, pool, etc.)
-            const unavailableTerms = [
-                /\s*(?:or|and)\s+spa\s+facilities?/gi,
-                /spa\s+facilities?/gi,
-                /\s*(?:or|and)\s+dining\s+options?/gi,  // "dining options" is vague - use "chef services" or "kitchen" instead
-                /\s*(?:or|and)\s+services?/gi  // Too vague
-            ];
-
-            for (const pattern of unavailableTerms) {
-                query = query.replace(pattern, '');
-            }
-
-            // If query mentions "amenities and services" or similar, simplify to just "amenities" or "facilities"
-            query = query.replace(/amenities\s+and\s+services/gi, 'amenities');
-            query = query.replace(/services\s+and\s+amenities/gi, 'amenities');
-            query = query.replace(/\s+and\s+services/gi, '');
-
-            // Clean up multiple spaces
-            query = query.replace(/\s+/g, ' ').trim();
-
-            // Final cleanup
-            query = query.trim();
-            if (!query.endsWith('?') && !query.endsWith('.')) {
-                query = query + '?';
-            }
-
-            return query;
         }
 
         async restartConversation() {
@@ -420,11 +319,12 @@
         }
 
         initUI() {
-            // Create widget container
-            const widget = document.createElement('div');
-            widget.id = 'chatbot-widget';
-            widget.className = `chatbot-widget chatbot-${this.position}`;
-            widget.innerHTML = `
+            try {
+                // Create widget container
+                const widget = document.createElement('div');
+                widget.id = 'chatbot-widget';
+                widget.className = `chatbot-widget chatbot-${this.position}`;
+                widget.innerHTML = `
                 <button id="chatbot-toggle" class="chatbot-toggle" aria-label="Open chat">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display: block; color: white; stroke: currentColor;">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" style="fill: none; stroke: currentColor;"></path>
@@ -471,7 +371,7 @@
                         <div id="chatbot-welcome" class="chatbot-welcome">
                             <div class="chatbot-welcome-content">
                                 <div class="chatbot-welcome-icon">
-                                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                         <polyline points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polyline>
                                     </svg>
                                 </div>
@@ -537,19 +437,33 @@
                 </div>
             `;
 
-            document.body.appendChild(widget);
+                // Ensure body exists before appending
+                if (!document.body) {
+                    console.error('Document body not found, waiting...');
+                    setTimeout(() => this.initUI(), 100);
+                    return;
+                }
 
-            // Show welcome screen initially
-            this.showWelcomeScreen();
+                document.body.appendChild(widget);
+                console.log('Chatbot widget element appended to DOM', widget);
+
+                // Show welcome screen initially
+                this.showWelcomeScreen();
+                console.log('Chatbot widget UI initialized successfully');
+            } catch (error) {
+                console.error('Error initializing chatbot UI:', error);
+                // Still try to create a minimal widget if UI creation fails
+                if (document.body) {
+                    const fallbackWidget = document.createElement('div');
+                    fallbackWidget.id = 'chatbot-widget';
+                    fallbackWidget.className = `chatbot-widget chatbot-${this.position}`;
+                    fallbackWidget.innerHTML = '<button id="chatbot-toggle" class="chatbot-toggle">💬</button>';
+                    document.body.appendChild(fallbackWidget);
+                }
+            }
         }
 
         bindEvents() {
-            // Prevent duplicate event binding
-            if (this._eventsBound) {
-                return;
-            }
-            this._eventsBound = true;
-
             const toggle = document.getElementById('chatbot-toggle');
             const close = document.getElementById('chatbot-close');
             const send = document.getElementById('chatbot-send');
@@ -562,20 +476,7 @@
 
             toggle.addEventListener('click', () => this.toggleChat());
             close.addEventListener('click', () => this.toggleChat());
-            // Use a flag to prevent double-clicking
-            let isSendingClick = false;
-            send.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation(); // Prevent other handlers from firing
-                if (!this.isLoading && !this.isProcessingAudio && !isSendingClick && !this._sending) {
-                    isSendingClick = true;
-                    this.sendMessage().finally(() => {
-                        // Reset flag after a short delay
-                        setTimeout(() => { isSendingClick = false; }, 500);
-                    });
-                }
-            });
+            send.addEventListener('click', () => this.sendMessage());
             if (voice) {
                 voice.addEventListener('click', () => this.toggleRecording());
             }
@@ -607,19 +508,11 @@
                 });
 
                 // Send on Enter, new line on Shift+Enter
-                // Use a flag to prevent double-triggering
-                let isSendingKey = false;
                 input.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation(); // Prevent other handlers from firing
-                        if (!send.disabled && !this.isLoading && !this.isProcessingAudio && !isSendingKey && !this._sending) {
-                            isSendingKey = true;
-                            this.sendMessage().finally(() => {
-                                // Reset flag after a short delay
-                                setTimeout(() => { isSendingKey = false; }, 500);
-                            });
+                        if (!send.disabled) {
+                            this.sendMessage();
                         }
                     }
                 });
@@ -755,115 +648,115 @@
                             header.style.opacity = '1';
                         }
                     }
+                }
 
-                    // On mobile, ensure input and send button are visible and functional
-                    if (this.isMobileDevice()) {
-                        const inputContainer = document.querySelector('.chatbot-input-container');
-                        const input = document.getElementById('chatbot-input');
-                        const sendBtn = document.getElementById('chatbot-send');
+                // On mobile, ensure input and send button are visible and functional
+                if (this.isMobileDevice()) {
+                    const inputContainer = document.querySelector('.chatbot-input-container');
+                    const input = document.getElementById('chatbot-input');
+                    const sendBtn = document.getElementById('chatbot-send');
 
-                        if (inputContainer) {
-                            inputContainer.style.display = 'flex';
-                            inputContainer.style.visibility = 'visible';
-                            inputContainer.style.opacity = '1';
-                        }
-
-                        if (input) {
-                            input.style.display = 'block';
-                            input.style.visibility = 'visible';
-                            input.style.opacity = '1';
-                            // Small delay to ensure window is visible before focusing
-                            setTimeout(() => {
-                                input.focus();
-                            }, 200);
-                        }
-
-                        if (sendBtn) {
-                            sendBtn.style.display = 'flex';
-                            sendBtn.style.visibility = 'visible';
-                            sendBtn.style.opacity = '1';
-                        }
-                    } else {
-                        // Desktop - focus input
-                        setTimeout(() => {
-                            const input = document.getElementById('chatbot-input');
-                            if (input) {
-                                input.focus();
-                            }
-                        }, 100);
+                    if (inputContainer) {
+                        inputContainer.style.display = 'flex';
+                        inputContainer.style.visibility = 'visible';
+                        inputContainer.style.opacity = '1';
                     }
 
-                    // Clear backend session when opening chat to ensure fresh start
-                    this.clearBackendSession(this.sessionId);
+                    if (input) {
+                        input.style.display = 'block';
+                        input.style.visibility = 'visible';
+                        input.style.opacity = '1';
+                        // Small delay to ensure window is visible before focusing
+                        setTimeout(() => {
+                            input.focus();
+                        }, 200);
+                    }
+
+                    if (sendBtn) {
+                        sendBtn.style.display = 'flex';
+                        sendBtn.style.visibility = 'visible';
+                        sendBtn.style.opacity = '1';
+                    }
                 } else {
-                    chatWindow.style.display = 'none';
-                    widget.classList.remove('chatbot-open');
+                    // Desktop - focus input
+                    setTimeout(() => {
+                        const input = document.getElementById('chatbot-input');
+                        if (input) {
+                            input.focus();
+                        }
+                    }, 100);
+                }
+
+                // Clear backend session when opening chat to ensure fresh start
+                this.clearBackendSession(this.sessionId);
+            } else {
+                chatWindow.style.display = 'none';
+                widget.classList.remove('chatbot-open');
 
 
-                    // Reset fullscreen state when closing (desktop)
-                    if (!this.isMobileDevice()) {
-                        chatWindow.classList.remove('chatbot-fullscreen');
-                        widget.classList.remove('chatbot-fullscreen-active');
-                        this.isFullscreen = false;
-                        document.body.style.overflow = '';
+                // Reset fullscreen state when closing (desktop)
+                if (!this.isMobileDevice()) {
+                    chatWindow.classList.remove('chatbot-fullscreen');
+                    widget.classList.remove('chatbot-fullscreen-active');
+                    this.isFullscreen = false;
+                    document.body.style.overflow = '';
 
-                        // Reset fullscreen button icon
-                        const fullscreenBtn = document.getElementById('chatbot-fullscreen');
-                        if (fullscreenBtn) {
-                            fullscreenBtn.innerHTML = `
+                    // Reset fullscreen button icon
+                    const fullscreenBtn = document.getElementById('chatbot-fullscreen');
+                    if (fullscreenBtn) {
+                        fullscreenBtn.innerHTML = `
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                             </svg>
                         `;
-                            fullscreenBtn.setAttribute('aria-label', 'Fullscreen');
-                        }
+                        fullscreenBtn.setAttribute('aria-label', 'Fullscreen');
+                    }
+                }
+
+                // On mobile, remove fullscreen class when closing and restore site
+                if (this.isMobileDevice()) {
+                    chatWindow.classList.remove('chatbot-fullscreen');
+                    this.isFullscreen = false;
+
+                    // Show toggle button again
+                    if (toggleBtn) {
+                        toggleBtn.style.display = 'flex';
                     }
 
-                    // On mobile, remove fullscreen class when closing and restore site
-                    if (this.isMobileDevice()) {
-                        chatWindow.classList.remove('chatbot-fullscreen');
-                        this.isFullscreen = false;
+                    // Restore body scroll
+                    document.body.classList.remove('chatbot-open-mobile');
+                    document.body.style.overflow = '';
+                    document.body.style.position = '';
+                    document.body.style.width = '';
+                    document.body.style.height = '';
 
-                        // Show toggle button again
-                        if (toggleBtn) {
-                            toggleBtn.style.display = 'flex';
+                    // Show all site content again
+                    const siteElements = document.querySelectorAll('body > *:not(#chatbot-widget)');
+                    siteElements.forEach(el => {
+                        if (el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE' && el.id !== 'chatbot-widget') {
+                            el.style.display = '';
+                            el.style.visibility = '';
                         }
+                    });
 
-                        // Restore body scroll
-                        document.body.classList.remove('chatbot-open-mobile');
-                        document.body.style.overflow = '';
-                        document.body.style.position = '';
-                        document.body.style.width = '';
-                        document.body.style.height = '';
-
-                        // Show all site content again
-                        const siteElements = document.querySelectorAll('body > *:not(#chatbot-widget)');
-                        siteElements.forEach(el => {
-                            if (el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE' && el.id !== 'chatbot-widget') {
-                                el.style.display = '';
-                                el.style.visibility = '';
-                            }
-                        });
-
-                        // Show WordPress elements again
-                        const wpElements = document.querySelectorAll('header, footer, nav, .site-header, .main-header, #masthead, .navbar, .navigation, #main, .site-content, .content-area, main');
-                        wpElements.forEach(el => {
-                            if (!el.closest('#chatbot-widget')) {
-                                el.style.display = '';
-                                el.style.visibility = '';
-                            }
-                        });
-
-                        // Show WordPress admin bar again
-                        const adminBar = document.getElementById('wpadminbar');
-                        if (adminBar) {
-                            adminBar.style.display = '';
+                    // Show WordPress elements again
+                    const wpElements = document.querySelectorAll('header, footer, nav, .site-header, .main-header, #masthead, .navbar, .navigation, #main, .site-content, .content-area, main');
+                    wpElements.forEach(el => {
+                        if (!el.closest('#chatbot-widget')) {
+                            el.style.display = '';
+                            el.style.visibility = '';
                         }
+                    });
 
-                        // Restore scroll position
-                        if (this.scrollY !== undefined) {
-                            window.scrollTo(0, this.scrollY);
-                        }
+                    // Show WordPress admin bar again
+                    const adminBar = document.getElementById('wpadminbar');
+                    if (adminBar) {
+                        adminBar.style.display = '';
+                    }
+
+                    // Restore scroll position
+                    if (this.scrollY !== undefined) {
+                        window.scrollTo(0, this.scrollY);
                     }
                 }
             }
@@ -875,83 +768,8 @@
                 this.hideWelcomeScreen();
             }
 
-            // Normalize content for comparison (remove HTML tags, trim whitespace)
-            const normalizeContent = (text) => {
-                if (!text) return '';
-                // Create a temporary element to strip HTML
-                const temp = document.createElement('div');
-                temp.innerHTML = text;
-                return temp.textContent || temp.innerText || text;
-            };
-            const normalizedContent = normalizeContent(content).trim();
-
-            // Create a unique key for this message
-            const messageKey = `${role}:${normalizedContent}`;
-
-            // Initialize pendingMessages if not exists
-            if (!this.pendingMessages) {
-                this.pendingMessages = new Set();
-            }
-
-            // FIRST: Check pending messages (for rapid duplicate calls) - check this FIRST
-            if (this.pendingMessages.has(messageKey)) {
-                return; // Don't add duplicate
-            }
-
-            // SECOND: Check messages array - check ALL messages for exact duplicates
-            if (this.messages.length > 0) {
-                for (const msg of this.messages) {
-                    if (msg.role === role) {
-                        const msgContent = normalizeContent(msg.content).trim().toLowerCase();
-                        // Use exact matching for both user and assistant messages
-                        if (msgContent === normalizedContent) {
-                            console.log('⚠️ Duplicate message detected in array, skipping:', normalizedContent.substring(0, 50));
-                            return; // Don't add duplicate
-                        }
-                    }
-                }
-            }
-
-            // THIRD: Check DOM for duplicates (most reliable but slower)
             const messagesContainer = document.getElementById('chatbot-messages');
-            if (messagesContainer) {
-                // Check if a message with the same content already exists in DOM
-                // Exclude streaming messages from check (they're being built)
-                const existingMessages = messagesContainer.querySelectorAll(`.chatbot-message-${role}:not(.chatbot-streaming)`);
-                for (const msg of existingMessages) {
-                    const msgContent = msg.querySelector('.chatbot-message-content');
-                    if (msgContent) {
-                        // Use textContent instead of innerHTML for more reliable comparison
-                        const existingText = normalizeContent(msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
-                        if (existingText === normalizedContent) {
-                            console.log('⚠️ Duplicate message detected in DOM, skipping:', normalizedContent.substring(0, 50));
-                            return; // Don't add duplicate
-                        }
-                    }
-                }
-            }
-
-            // Mark as pending AFTER we've verified it's not a duplicate
-            this.pendingMessages.add(messageKey);
-
-            // Clean up old pending messages (keep only last 10)
-            if (this.pendingMessages.size > 10) {
-                const entries = Array.from(this.pendingMessages);
-                this.pendingMessages = new Set(entries.slice(-10));
-            }
-
-            if (!messagesContainer) {
-                console.error('Messages container not found');
-                return;
-            }
-
-            // Add to messages array IMMEDIATELY before creating DOM element to prevent duplicates
-            this.messages.push({ role, content });
-
             const messageDiv = document.createElement('div');
-            // Add unique ID to track this specific message instance
-            const messageId = `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            messageDiv.id = messageId;
             messageDiv.className = `chatbot-message chatbot-message-${role}`;
 
             let messageHTML = '';
@@ -1029,163 +847,22 @@
                 messageHTML += '</div>'; // chatbot-image-slider
             }
 
-            // Sources removed - not displaying retrieved sources anymore
-            // if (sources && sources.length > 0) {
-            //     messageHTML += '<div class="chatbot-sources"><strong>Retrieved sources:</strong><ol>';
-            //     sources.forEach((source, index) => {
-            //         const docName = source.document || 'Unknown source';
-            //         const displayName = docName.split('/').pop().replace('.md', '') || docName;
-            //         messageHTML += `<li>${displayName}`;
-            //         if (source.score && source.score !== 'N/A') {
-            //             messageHTML += ` <span class="chatbot-score">(score: ${source.score})</span>`;
-            //         }
-            //         messageHTML += `</li>`;
-            //     });
-            //     messageHTML += '</ol></div>';
-            // }
-
-            // Then add the answer content (like Streamlit)
-            // messageHTML += `<div class="chatbot-message-content">${this.formatMessage(content)}</div>`;
-
-            // Add images if available - create horizontal gallery
-            // Handle both array format (single cottage) and dict format (multiple cottages grouped)
-            if (images) {
-                // Check if images is a dictionary (grouped by cottage)
-                if (images && typeof images === 'object' && !Array.isArray(images)) {
-                    // Grouped by cottage - create separate gallery for each cottage
-                    console.log('Creating grouped image galleries for cottages:', Object.keys(images));
-
-                    // Sort cottage numbers to display in order (7, 9, 11)
-                    const cottageNumbers = Object.keys(images).sort((a, b) => {
-                        const numA = parseInt(a);
-                        const numB = parseInt(b);
-                        return numA - numB;
-                    });
-
-                    cottageNumbers.forEach((cottageNum) => {
-                        const cottageImages = images[cottageNum];
-                        if (cottageImages && Array.isArray(cottageImages) && cottageImages.length > 0) {
-                            messageHTML += `<div class="chatbot-cottage-images-group">`;
-                            messageHTML += `<h4 class="chatbot-cottage-title">Cottage ${cottageNum}</h4>`;
-                            messageHTML += '<div class="chatbot-image-gallery">';
-
-                            cottageImages.forEach((imgUrl, index) => {
-                                if (!imgUrl) {
-                                    console.warn(`Image URL at index ${index} is empty for Cottage ${cottageNum}`);
-                                    return;
-                                }
-
-                                // Ensure URL is properly formatted
-                                let fullUrl = imgUrl;
-
-                                // If it's already a full URL, use it as is
-                                if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
-                                    fullUrl = imgUrl;
-                                }
-                                // If it starts with /, it's a relative path from API base
-                                else if (imgUrl.startsWith('/')) {
-                                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-                                    fullUrl = `${baseUrl}${imgUrl}`;
-                                }
-                                // Otherwise, treat as relative and add to API base
-                                else {
-                                    const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
-                                    fullUrl = `${baseUrl}${imgUrl}`;
-                                }
-
-                                messageHTML += `<div class="chatbot-image-wrapper">
-                                    <div class="chatbot-image-loader">
-                                        <div class="chatbot-spinner"></div>
-                                    </div>
-                                    <img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
-                                </div>`;
-                            });
-
-                            messageHTML += '</div>'; // chatbot-image-gallery
-                            messageHTML += '</div>'; // chatbot-cottage-images-group
-                        }
-                    });
-                } else if (Array.isArray(images) && images.length > 0) {
-                    // Single array format (backward compatibility)
-                    console.log('Creating image gallery with', images.length, 'images');
-                    console.log('API URL:', this.apiUrl);
-
-                    messageHTML += '<div class="chatbot-image-gallery">';
-                    images.forEach((imgUrl, index) => {
-                        if (!imgUrl) {
-                            console.warn(`Image URL at index ${index} is empty`);
-                            return;
-                        }
-
-                        // Ensure URL is properly formatted
-                        let fullUrl = imgUrl;
-
-                        // If it's already a full URL, use it as is
-                        if (imgUrl.startsWith('http://') || imgUrl.startsWith('https://')) {
-                            fullUrl = imgUrl;
-                        }
-                        // If it starts with /, it's a relative path from API base
-                        else if (imgUrl.startsWith('/')) {
-                            // Remove trailing slash from apiUrl if present, then add the image path
-                            const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl.slice(0, -1) : this.apiUrl;
-                            fullUrl = `${baseUrl}${imgUrl}`;
-                        }
-                        // Otherwise, treat as relative and add to API base
-                        else {
-                            const baseUrl = this.apiUrl.endsWith('/') ? this.apiUrl : `${this.apiUrl}/`;
-                            fullUrl = `${baseUrl}${imgUrl}`;
-                        }
-
-                        console.log(`Image [${index}]: Original="${imgUrl}", Full="${fullUrl}"`);
-
-                        messageHTML += `<div class="chatbot-image-wrapper">
-                            <div class="chatbot-image-loader">
-                                <div class="chatbot-spinner"></div>
-                            </div>
-                            <img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
-                        </div>`;
-                    });
-                    messageHTML += '</div>'; // chatbot-image-gallery
-                }
-
-                messageHTML += '</div>'; // chatbot-image-slider
-            }
-
             messageDiv.innerHTML = messageHTML;
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-            // Check if this message div already exists in DOM before appending
-            const existingDivs = messagesContainer.querySelectorAll(`.chatbot-message-${role}`);
-            let alreadyInDOM = false;
-            for (const existingDiv of existingDivs) {
-                const existingContent = existingDiv.querySelector('.chatbot-message-content');
-                if (existingContent) {
-                    const existingText = normalizeContent(existingContent.textContent || existingContent.innerText || '').trim().toLowerCase();
-                    if (existingText === normalizedContent) {
-                        alreadyInDOM = true;
-                        // Remove the duplicate messageDiv we just created
-                        messageDiv.remove();
-                        break;
-                    }
+            // Initialize slider if images were added
+            if (images && images.length > 0) {
+                const slider = messageDiv.querySelector('.chatbot-image-slider');
+                if (slider && slider.id) {
+                    // Use setTimeout to ensure DOM is ready
+                    setTimeout(() => {
+                        this.initImageSlider(slider.id);
+                    }, 100);
                 }
             }
 
-            if (!alreadyInDOM) {
-                messagesContainer.appendChild(messageDiv);
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-                // Add click handlers to images for fullscreen viewing
-                this.attachImageClickHandlers(messageDiv);
-            } else {
-                // Remove from messages array since we're not adding it
-                const index = this.messages.findIndex(msg =>
-                    msg.role === role && normalizeContent(msg.content).trim().toLowerCase() === normalizedContent
-                );
-                if (index !== -1) {
-                    this.messages.splice(index, 1);
-                }
-            }
-
-            // NOTE: Message is already added to this.messages array at line 968, don't add again here
+            this.messages.push({ role, content });
         }
 
         initImageSlider(sliderId) {
@@ -1289,7 +966,7 @@
 
         formatMessage(text) {
             // Simple markdown-like formatting
-            let formatted = text
+            return text
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\*(.*?)\*/g, '<em>$1</em>')
                 .replace(/\n/g, '<br>')
@@ -1297,43 +974,6 @@
                 .replace(/❌/g, '❌')
                 .replace(/👋/g, '👋')
                 .replace(/🏡/g, '🏡');
-
-            // Format links with icons
-            // Pattern: Location: [text](url) or Location: text (url)
-            formatted = formatted.replace(/Location:\s*([^\n<]+?)\s*(?:\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\))/gi, (match, text, url1, text2, url2) => {
-                const linkText = text2 || text.trim();
-                const linkUrl = url2 || url1 || text.trim();
-                return `<div class="chatbot-link-item">
-                    <span class="chatbot-link-icon">📍</span>
-                    <span class="chatbot-link-label">Location:</span>
-                    <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${linkText}</a>
-                </div>`;
-            });
-
-            // Pattern: More Info: [text](url) or More Info: text (url) or View property details
-            formatted = formatted.replace(/(?:More Info|View property details|View on|View|Details):\s*([^\n<]+?)\s*(?:\(([^)]+)\)|\[([^\]]+)\]\(([^)]+)\))/gi, (match, text, url1, text2, url2) => {
-                const linkText = text2 || text.trim();
-                const linkUrl = url2 || url1 || text.trim();
-                return `<div class="chatbot-link-item">
-                    <span class="chatbot-link-icon">🔗</span>
-                    <span class="chatbot-link-label">More Info:</span>
-                    <a href="${linkUrl}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${linkText}</a>
-                </div>`;
-            });
-
-            // Pattern: Any URL (http/https) not already in a link
-            formatted = formatted.replace(/(?<!href=["'])(?<!<a[^>]*>)(https?:\/\/[^\s<>"']+)/gi, (match, url) => {
-                // Check if it's already inside a link tag
-                if (match.includes('<a') || match.includes('</a>')) {
-                    return match;
-                }
-                return `<div class="chatbot-link-item">
-                    <span class="chatbot-link-icon">🔗</span>
-                    <a href="${url}" target="_blank" rel="noopener noreferrer" class="chatbot-link">${url}</a>
-                </div>`;
-            });
-
-            return formatted;
         }
 
 
@@ -1344,8 +984,28 @@
             const actionsContainer = document.createElement('div');
             actionsContainer.className = 'chatbot-follow-up-actions';
 
-            // Skip quick action buttons in widget (removed per user request)
-            // Quick action buttons are not shown in the widget
+            // Add quick action buttons
+            if (followUpActions.quick_actions && followUpActions.quick_actions.length > 0) {
+                const quickActionsDiv = document.createElement('div');
+                quickActionsDiv.className = 'chatbot-quick-actions';
+
+                followUpActions.quick_actions.forEach(action => {
+                    const button = document.createElement('button');
+                    button.className = 'chatbot-quick-action-btn';
+                    button.textContent = action.text;
+                    button.setAttribute('data-action', action.action);
+                    button.setAttribute('type', 'button');
+
+                    // Handle button click
+                    button.addEventListener('click', () => {
+                        this.handleQuickAction(action);
+                    });
+
+                    quickActionsDiv.appendChild(button);
+                });
+
+                actionsContainer.appendChild(quickActionsDiv);
+            }
 
             // Add suggestion chips
             if (followUpActions.suggestions && followUpActions.suggestions.length > 0) {
@@ -1421,7 +1081,12 @@
             const listeningDiv = document.createElement('div');
             listeningDiv.id = 'chatbot-listening';
             listeningDiv.className = 'chatbot-message chatbot-message-assistant chatbot-listening';
-            listeningDiv.innerHTML = '<div class="chatbot-message-content">🎤 Listening...</div>';
+            listeningDiv.innerHTML = `
+                <div class="chatbot-message-content">
+                    <div>🎤 Listening...</div>
+                    <div id="chatbot-realtime-transcript" style="margin-top: 8px; color: #666; font-style: italic; min-height: 20px;"></div>
+                </div>
+            `;
             messagesContainer.appendChild(listeningDiv);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
@@ -1430,6 +1095,96 @@
             const listening = document.getElementById('chatbot-listening');
             if (listening) {
                 listening.remove();
+            }
+        }
+
+        updateRealTimeTranscript(text) {
+            const transcriptDiv = document.getElementById('chatbot-realtime-transcript');
+            if (transcriptDiv) {
+                if (text && text.trim()) {
+                    transcriptDiv.textContent = text;
+                    transcriptDiv.style.color = '#333';
+                } else {
+                    transcriptDiv.textContent = '';
+                }
+            }
+        }
+
+        clearRealTimeTranscript() {
+            this.realTimeTranscript = '';
+            this.interimTranscript = '';
+            this.updateRealTimeTranscript('');
+        }
+
+        initSpeechRecognition() {
+            // Check if browser supports Web Speech API
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.log('⚠️ Web Speech API not supported in this browser');
+                return;
+            }
+
+            try {
+                this.speechRecognition = new SpeechRecognition();
+                this.speechRecognition.continuous = true; // Keep listening continuously
+                this.speechRecognition.interimResults = true; // Get interim results for real-time display
+                this.speechRecognition.lang = 'en-US'; // Set language
+
+                // Handle results
+                this.speechRecognition.onresult = (event) => {
+                    if (!this.isRecording || this.isWaitingForResponse) {
+                        return;
+                    }
+
+                    let interimTranscript = '';
+                    let finalTranscript = '';
+
+                    // Process all results
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript;
+                        if (event.results[i].isFinal) {
+                            finalTranscript += transcript + ' ';
+                        } else {
+                            interimTranscript += transcript;
+                        }
+                    }
+
+                    // Update real-time transcript display
+                    if (finalTranscript) {
+                        this.realTimeTranscript += finalTranscript;
+                        this.interimTranscript = '';
+                    } else {
+                        this.interimTranscript = interimTranscript;
+                    }
+
+                    // Display combined transcript
+                    const displayText = this.realTimeTranscript + this.interimTranscript;
+                    this.updateRealTimeTranscript(displayText);
+                };
+
+                // Handle errors
+                this.speechRecognition.onerror = (event) => {
+                    console.error('Speech recognition error:', event.error);
+                    // Don't stop recording on error, just log it
+                };
+
+                // Handle end (restart if still recording)
+                this.speechRecognition.onend = () => {
+                    if (this.isRecording && !this.isWaitingForResponse) {
+                        // Restart recognition if still recording
+                        try {
+                            this.speechRecognition.start();
+                        } catch (e) {
+                            // Already started or error, ignore
+                        }
+                    }
+                };
+
+                // Start recognition
+                this.speechRecognition.start();
+                console.log('✅ Real-time speech recognition started');
+            } catch (error) {
+                console.error('Error initializing speech recognition:', error);
             }
         }
 
@@ -1476,289 +1231,6 @@
             if (searchingDiv) {
                 searchingDiv.remove();
             }
-        }
-
-        attachImageClickHandlers(messageDiv) {
-            if (!messageDiv) return;
-
-            // Wait a bit for images to be in DOM
-            setTimeout(() => {
-                const images = messageDiv.querySelectorAll('.chatbot-cottage-image');
-                if (images.length === 0) {
-                    console.log('No images found in messageDiv');
-                    return;
-                }
-
-                console.log(`Found ${images.length} images, attaching click handlers`);
-
-                // Collect all images from the same message (for navigation)
-                const imageArray = Array.from(images);
-
-                imageArray.forEach((img, index) => {
-                    img.style.cursor = 'pointer';
-
-                    // Remove any existing click handlers by cloning
-                    const newImg = img.cloneNode(true);
-                    if (img.parentNode) {
-                        img.parentNode.replaceChild(newImg, img);
-                    }
-
-                    newImg.style.cursor = 'pointer';
-                    newImg.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        console.log('Image clicked:', newImg.src, 'Index:', index);
-
-                        // Get all image sources from the array
-                        const allImageSrcs = imageArray.map(i => {
-                            const src = i.src || (typeof i === 'string' ? i : null);
-                            return src;
-                        }).filter(Boolean);
-
-                        this.openImageFullscreen(newImg.src, allImageSrcs, index);
-                    });
-                });
-            }, 100);
-        }
-
-        openImageFullscreen(imageSrc, imageArray, currentIndex) {
-            console.log('Opening fullscreen:', imageSrc, 'Array length:', imageArray.length, 'Index:', currentIndex);
-
-            // Get widget elements
-            const chatWindow = document.getElementById('chatbot-window');
-            const messagesContainer = document.getElementById('chatbot-messages');
-
-            if (!chatWindow) {
-                console.error('Chatbot window not found!');
-                return;
-            }
-
-            // Extract src from image elements if they're DOM elements
-            const imageSrcs = imageArray.map(img => {
-                if (typeof img === 'string') return img;
-                return img.src || img;
-            });
-
-            console.log('Image sources:', imageSrcs);
-
-            // Get widget container
-            const widget = document.getElementById('chatbot-widget');
-
-            // Store original widget state
-            const originalWindowStyle = {
-                position: chatWindow.style.position || '',
-                top: chatWindow.style.top || '',
-                left: chatWindow.style.left || '',
-                right: chatWindow.style.right || '',
-                bottom: chatWindow.style.bottom || '',
-                width: chatWindow.style.width || '',
-                height: chatWindow.style.height || '',
-                maxWidth: chatWindow.style.maxWidth || '',
-                maxHeight: chatWindow.style.maxHeight || '',
-                borderRadius: chatWindow.style.borderRadius || '',
-                zIndex: chatWindow.style.zIndex || ''
-            };
-
-            // Store original widget class state
-            const hadFullscreenClass = widget ? widget.classList.contains('chatbot-fullscreen-active') : false;
-
-            // Ensure chat window has relative positioning for absolute overlay
-            const originalChatWindowPosition = chatWindow.style.position || '';
-            if (!originalChatWindowPosition || originalChatWindowPosition === 'static') {
-                chatWindow.style.position = 'relative';
-            }
-
-            // Create fullscreen overlay (absolute within chat window, not viewport)
-            const overlay = document.createElement('div');
-            overlay.className = 'chatbot-image-fullscreen-overlay';
-            overlay.innerHTML = `
-                <div class="chatbot-image-fullscreen-container">
-                    <button class="chatbot-image-fullscreen-close" aria-label="Close" title="Close (Esc)">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="18" y1="6" x2="6" y2="18"></line>
-                            <line x1="6" y1="6" x2="18" y2="18"></line>
-                        </svg>
-                    </button>
-                    ${imageSrcs.length > 1 ? `
-                        <button class="chatbot-image-fullscreen-prev" aria-label="Previous" title="Previous (←)">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="15 18 9 12 15 6"></polyline>
-                            </svg>
-                        </button>
-                        <button class="chatbot-image-fullscreen-next" aria-label="Next" title="Next (→)">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="9 18 15 12 9 6"></polyline>
-                            </svg>
-                        </button>
-                    ` : ''}
-                    <div class="chatbot-image-fullscreen-content">
-                        <img src="${imageSrc}" alt="Fullscreen image" class="chatbot-image-fullscreen-img" />
-                        ${imageSrcs.length > 1 ? `
-                            <div class="chatbot-image-fullscreen-counter">
-                                ${currentIndex + 1} / ${imageSrcs.length}
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-
-            // Overlay styles (absolute within chat window, covers entire widget)
-            overlay.style.cssText = `
-                position: absolute !important;
-                top: 0 !important;
-                left: 0 !important;
-                width: 100% !important;
-                height: 100% !important;
-                background-color: rgba(0, 0, 0, 0.95) !important;
-                z-index: 100000000 !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                opacity: 0 !important;
-                transition: opacity 0.3s ease !important;
-                cursor: pointer !important;
-                visibility: visible !important;
-            `;
-
-            // Store original state for restoration
-            overlay._originalWindowStyle = originalWindowStyle;
-            overlay._originalChatWindowPosition = originalChatWindowPosition;
-            overlay._chatWindow = chatWindow;
-            overlay._messagesContainer = messagesContainer;
-            overlay._hadFullscreenClass = hadFullscreenClass;
-            overlay._widget = widget;
-
-            // Append to chat window (absolute positioning relative to widget)
-            chatWindow.appendChild(overlay);
-            console.log('Overlay added to chat window');
-
-            // Close button
-            const closeBtn = overlay.querySelector('.chatbot-image-fullscreen-close');
-            if (closeBtn) {
-                closeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    console.log('Close button clicked');
-                    this.closeImageFullscreen(overlay);
-                });
-            } else {
-                console.error('Close button not found!');
-            }
-
-            // Close on overlay click (but not on image or buttons)
-            overlay.addEventListener('click', (e) => {
-                if (e.target === overlay || e.target.classList.contains('chatbot-image-fullscreen-container')) {
-                    console.log('Overlay clicked, closing');
-                    this.closeImageFullscreen(overlay);
-                }
-            });
-
-            // Close on Escape key
-            const escapeHandler = (e) => {
-                if (e.key === 'Escape') {
-                    console.log('Escape pressed, closing');
-                    this.closeImageFullscreen(overlay);
-                    document.removeEventListener('keydown', escapeHandler);
-                }
-            };
-            document.addEventListener('keydown', escapeHandler);
-            overlay._escapeHandler = escapeHandler;
-
-            // Navigation (if multiple images)
-            if (imageSrcs.length > 1) {
-                let currentIdx = currentIndex;
-                const fullscreenImg = overlay.querySelector('.chatbot-image-fullscreen-img');
-                const counter = overlay.querySelector('.chatbot-image-fullscreen-counter');
-
-                const updateImage = (newIndex) => {
-                    currentIdx = newIndex;
-                    if (currentIdx < 0) currentIdx = imageSrcs.length - 1;
-                    if (currentIdx >= imageSrcs.length) currentIdx = 0;
-
-                    if (fullscreenImg && imageSrcs[currentIdx]) {
-                        fullscreenImg.src = imageSrcs[currentIdx];
-                    }
-                    if (counter) {
-                        counter.textContent = `${currentIdx + 1} / ${imageSrcs.length}`;
-                    }
-                };
-
-                const prevBtn = overlay.querySelector('.chatbot-image-fullscreen-prev');
-                const nextBtn = overlay.querySelector('.chatbot-image-fullscreen-next');
-
-                prevBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    updateImage(currentIdx - 1);
-                });
-
-                nextBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    updateImage(currentIdx + 1);
-                });
-
-                // Keyboard navigation
-                const keyHandler = (e) => {
-                    if (e.key === 'ArrowLeft') {
-                        e.preventDefault();
-                        updateImage(currentIdx - 1);
-                    } else if (e.key === 'ArrowRight') {
-                        e.preventDefault();
-                        updateImage(currentIdx + 1);
-                    }
-                };
-                document.addEventListener('keydown', keyHandler);
-
-                // Store handler for cleanup
-                overlay._keyHandler = keyHandler;
-            }
-
-            // Fade in animation
-            setTimeout(() => {
-                overlay.classList.add('active');
-                overlay.style.opacity = '1';
-                console.log('Overlay should be visible now');
-                console.log('Overlay element:', overlay);
-                console.log('Overlay computed display:', window.getComputedStyle(overlay).display);
-                console.log('Overlay computed z-index:', window.getComputedStyle(overlay).zIndex);
-                console.log('Overlay computed opacity:', window.getComputedStyle(overlay).opacity);
-                console.log('Overlay computed visibility:', window.getComputedStyle(overlay).visibility);
-            }, 10);
-        }
-
-        closeImageFullscreen(overlay) {
-            overlay.classList.remove('active');
-            overlay.style.opacity = '0';
-
-            setTimeout(() => {
-                // Remove event listeners
-                if (overlay._keyHandler) {
-                    document.removeEventListener('keydown', overlay._keyHandler);
-                }
-                if (overlay._escapeHandler) {
-                    document.removeEventListener('keydown', overlay._escapeHandler);
-                }
-
-                // Restore chat window position if we changed it
-                if (overlay._chatWindow && overlay._originalChatWindowPosition !== undefined) {
-                    const chatWindow = overlay._chatWindow;
-                    if (overlay._originalChatWindowPosition === '' || overlay._originalChatWindowPosition === 'static') {
-                        // Only restore if we actually changed it
-                        chatWindow.style.position = overlay._originalChatWindowPosition || '';
-                    }
-                }
-
-                // Restore chat scroll
-                if (overlay._messagesContainer) {
-                    overlay._messagesContainer.style.overflow = '';
-                }
-
-                // Remove overlay
-                if (overlay && overlay.parentNode) {
-                    overlay.remove();
-                }
-
-                console.log('Image fullscreen closed, widget state restored');
-            }, 300);
         }
 
         createSourcesDiv(sources) {
@@ -1826,12 +1298,7 @@
                                 fullUrl = `${baseUrl}${imgUrl}`;
                             }
 
-                            groupedHTML += `<div class="chatbot-image-wrapper">
-                                <div class="chatbot-image-loader">
-                                    <div class="chatbot-spinner"></div>
-                                </div>
-                                <img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="eager" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
-                            </div>`;
+                            groupedHTML += `<img src="${fullUrl}" alt="Cottage ${cottageNum} image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
                         });
 
                         groupedHTML += '</div>'; // chatbot-image-gallery
@@ -1840,9 +1307,6 @@
                 });
 
                 messageDiv.insertAdjacentHTML('beforeend', groupedHTML);
-
-                // Add click handlers to images for fullscreen viewing
-                setTimeout(() => this.attachImageClickHandlers(messageDiv), 0);
                 return;
             }
 
@@ -1864,118 +1328,37 @@
                     fullUrl = `${baseUrl}${imgUrl}`;
                 }
 
-                galleryHTML += `<div class="chatbot-image-wrapper">
-                    <div class="chatbot-image-loader">
-                        <div class="chatbot-spinner"></div>
-                    </div>
-                    <img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" onload="this.parentElement.querySelector('.chatbot-image-loader').style.display='none';" />
-                </div>`;
+                galleryHTML += `<img src="${fullUrl}" alt="Cottage image ${index + 1}" class="chatbot-cottage-image" loading="lazy" onerror="this.style.display='none';" />`;
             });
             galleryHTML += '</div>';
 
             messageDiv.insertAdjacentHTML('beforeend', galleryHTML);
-
-            // Add click handlers to images for fullscreen viewing
-            setTimeout(() => this.attachImageClickHandlers(messageDiv), 0);
         }
 
         async sendMessage(questionOverride = null) {
-            // Set flag IMMEDIATELY to prevent race conditions
-            if (this._sending) {
-                console.log('⚠️ Already sending, ignoring duplicate request');
-                return;
-            }
-            this._sending = true;
-
-            // Prevent multiple simultaneous sends
-            if (this.isLoading || this.isProcessingAudio) {
-                console.log('⚠️ Already processing, ignoring send request');
-                this._sending = false;
-                return;
-            }
-
             const input = document.getElementById('chatbot-input');
             const question = questionOverride || input.value.trim();
 
-            if (!question) {
-                this._sending = false;
+            if (!question || this.isLoading) {
                 return;
             }
 
-            // Set loading flag immediately to prevent duplicate sends
-            this.isLoading = true;
-
-            // Clear input and reset height BEFORE adding message
+            // Clear input and reset height
             input.value = '';
             input.style.height = 'auto';
             this.updateSendButton();
 
-            // Add user message (duplicate check is inside addMessage)
-            // Double-check before adding to prevent duplicates
-            const normalizedQuestion = question.trim().toLowerCase();
-
-            // Initialize pendingMessages if not exists
-            if (!this.pendingMessages) {
-                this.pendingMessages = new Set();
-            }
-
-            // Check pendingMessages FIRST (before any other checks) to prevent race conditions
-            const messageKey = `user:${normalizedQuestion}`;
-            if (this.pendingMessages.has(messageKey)) {
-                console.log('⚠️ Message already pending, skipping duplicate');
-                this._sending = false;
-                this.isLoading = false;
-                return;
-            }
-
-            const alreadyExists = this.messages.some(msg =>
-                msg.role === 'user' && msg.content.trim().toLowerCase() === normalizedQuestion
-            );
-
-            // Also check DOM for immediate duplicates (exclude any streaming messages)
-            const messagesContainer = document.getElementById('chatbot-messages');
-            let existsInDOM = false;
-            if (messagesContainer) {
-                const existingUserMessages = messagesContainer.querySelectorAll('.chatbot-message-user:not(.chatbot-streaming)');
-                for (const msg of existingUserMessages) {
-                    const msgContent = msg.querySelector('.chatbot-message-content');
-                    if (msgContent) {
-                        // Use textContent for reliable comparison
-                        const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
-                        if (existingText === normalizedQuestion) {
-                            existsInDOM = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!alreadyExists && !existsInDOM) {
-                // addMessage() will add to pendingMessages internally
-                this.addMessage('user', question);
-            } else {
-                console.log('⚠️ Question already exists (in messages or DOM), skipping duplicate');
-            }
+            // Add user message
+            this.addMessage('user', question);
 
             // Show loading
             this.showLoading();
 
-            // Check if there's already a streaming message div for this question
-            // This prevents duplicate API calls and duplicate response divs
-            const existingStreamingDiv = messagesContainer.querySelector('.chatbot-message-assistant.chatbot-streaming');
-            if (existingStreamingDiv) {
-                console.log('⚠️ Streaming message div already exists, skipping duplicate API call');
-                this._sending = false;
-                this.isLoading = false;
-                return;
-            }
 
             // Create assistant message container for streaming
-            // Reuse messagesContainer from above
+            const messagesContainer = document.getElementById('chatbot-messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = 'chatbot-message chatbot-message-assistant chatbot-streaming';
-            // Store question in data attribute for duplicate detection
-            messageDiv.setAttribute('data-question', normalizedQuestion);
 
             // Show thinking indicator immediately
             const thinkingIndicator = document.createElement('div');
@@ -2010,7 +1393,6 @@
                     }),
                 });
 
-
                 if (!response.ok) {
                     const errorText = await response.text();
                     let errorDetail = `HTTP error! status: ${response.status}`;
@@ -2025,206 +1407,176 @@
                     throw new Error(errorDetail);
                 }
 
-                // if (!response.ok) {
-                //     const errorText = await response.text();
-                //     let errorDetail = `HTTP error! status: ${response.status}`;
-                //     try {
-                //         const errorJson = JSON.parse(errorText);
-                //         if (errorJson.detail) {
-                //             errorDetail = errorJson.detail;
-                //         }
-                //     } catch (e) {
-                //         errorDetail = errorText || errorDetail;
-                //     }
-                //     throw new Error(errorDetail);
-                // }
+                // Check if response is streaming (text/event-stream) or JSON
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('text/event-stream')) {
+                    // Read stream
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
 
-                // Hide loading
-                this.hideLoading();
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            // Stream ended - make sure loading is hidden
+                            this.hideLoading();
+                            this.hideSearching();
+                            break;
+                        }
 
-                // Read stream
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop(); // Keep incomplete line in buffer
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
 
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop(); // Keep incomplete line in buffer
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-
-                                if (data.type === 'searching') {
-                                    // Update searching message
-                                    this.showSearching(data.message || 'Searching...');
-                                }
-                                else if (data.type === 'hide_searching') {
-                                    // Hide searching message (when fallback is shown)
-                                    this.hideSearching();
-                                }
-                                else if (data.type === 'sources_found') {
-                                    // Hide searching - sources are no longer displayed
-                                    this.hideSearching();
-                                    sources = data.sources; // Store for reference but don't display
-                                    // Sources display removed - not showing retrieved sources anymore
-                                }
-                                else if (data.type === 'typing') {
-                                    // Remove thinking indicator when typing starts
-                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
-                                    if (thinkingIndicator) {
-                                        thinkingIndicator.remove();
-                                        contentDiv.style.display = 'block';
+                                    if (data.type === 'searching') {
+                                        // Update searching message
+                                        this.showSearching(data.message || 'Searching...');
                                     }
-
-                                    // Show typing indicator
-                                    if (!typingIndicator) {
-                                        typingIndicator = document.createElement('div');
-                                        typingIndicator.className = 'chatbot-typing-indicator';
-                                        typingIndicator.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
-                                        messageDiv.insertBefore(typingIndicator, contentDiv);
+                                    else if (data.type === 'hide_searching') {
+                                        // Hide searching message (when fallback is shown)
+                                        this.hideSearching();
                                     }
-                                }
-                                else if (data.type === 'token') {
-                                    // Remove thinking indicator when first token arrives
-                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
-                                    if (thinkingIndicator) {
-                                        thinkingIndicator.remove();
-                                        contentDiv.style.display = 'block';
+                                    else if (data.type === 'sources_found') {
+                                        // Hide searching - sources are no longer displayed
+                                        this.hideSearching();
+                                        sources = data.sources; // Store for reference but don't display
+                                        // Sources display removed - not showing retrieved sources anymore
                                     }
+                                    else if (data.type === 'typing') {
+                                        // Remove thinking indicator when typing starts
+                                        const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                        if (thinkingIndicator) {
+                                            thinkingIndicator.remove();
+                                            contentDiv.style.display = 'block';
+                                        }
 
-                                    // Remove typing indicator when first token arrives
-                                    if (typingIndicator) {
-                                        typingIndicator.remove();
-                                        typingIndicator = null;
-                                    }
-
-                                    // Sources are no longer displayed - removed
-
-                                    // Append token to answer
-                                    fullAnswer += data.chunk;
-                                    contentDiv.innerHTML = this.formatMessage(fullAnswer) + '<span class="chatbot-cursor">▌</span>';
-
-                                    // Smooth auto-scroll (throttled)
-                                    const now = Date.now();
-                                    if (now - lastScrollTime > 50) { // Scroll every 50ms max
-                                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                                        lastScrollTime = now;
-                                    }
-                                }
-                                else if (data.type === 'progress') {
-                                    // Update progress bar
-                                    if (!progressBar) {
-                                        progressBar = document.createElement('div');
-                                        progressBar.className = 'chatbot-progress-bar';
-                                        progressBar.innerHTML = '<div class="chatbot-progress-fill"></div>';
-                                        messageDiv.insertBefore(progressBar, contentDiv);
-                                    }
-                                    const progressFill = progressBar.querySelector('.chatbot-progress-fill');
-                                    if (progressFill) {
-                                        progressFill.style.width = `${data.progress}%`;
-                                    }
-                                }
-                                else if (data.type === 'done') {
-                                    // Check if this assistant message already exists in DOM or array before processing
-                                    const normalizedAnswer = fullAnswer.trim().toLowerCase();
-                                    const alreadyInArray = this.messages.some(msg =>
-                                        msg.role === 'assistant' && msg.content.trim().toLowerCase() === normalizedAnswer
-                                    );
-
-                                    // Check if message already exists in DOM (shouldn't happen, but check anyway)
-                                    const existingAssistantMessages = messagesContainer.querySelectorAll('.chatbot-message-assistant:not(.chatbot-streaming)');
-                                    let alreadyInDOM = false;
-                                    for (const msg of existingAssistantMessages) {
-                                        const msgContent = msg.querySelector('.chatbot-message-content');
-                                        if (msgContent) {
-                                            const existingText = msgContent.textContent.trim().toLowerCase();
-                                            if (existingText === normalizedAnswer) {
-                                                alreadyInDOM = true;
-                                                break;
-                                            }
+                                        // Show typing indicator
+                                        if (!typingIndicator) {
+                                            typingIndicator = document.createElement('div');
+                                            typingIndicator.className = 'chatbot-typing-indicator';
+                                            typingIndicator.innerHTML = '<span class="typing-dots"><span></span><span></span><span></span></span>';
+                                            messageDiv.insertBefore(typingIndicator, contentDiv);
                                         }
                                     }
+                                    else if (data.type === 'token') {
+                                        // Remove thinking indicator when first token arrives
+                                        const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                        if (thinkingIndicator) {
+                                            thinkingIndicator.remove();
+                                            contentDiv.style.display = 'block';
+                                        }
 
-                                    // If duplicate found, remove the streaming messageDiv and return
-                                    if (alreadyInArray || alreadyInDOM) {
-                                        console.log('⚠️ Duplicate assistant message detected in done event, removing streaming div');
-                                        messageDiv.remove();
-                                        return;
+                                        // Remove typing indicator when first token arrives
+                                        if (typingIndicator) {
+                                            typingIndicator.remove();
+                                            typingIndicator = null;
+                                        }
+
+                                        // Sources are no longer displayed - removed
+
+                                        // Append token to answer
+                                        fullAnswer += data.chunk;
+                                        contentDiv.innerHTML = this.formatMessage(fullAnswer) + '<span class="chatbot-cursor">▌</span>';
+
+                                        // Smooth auto-scroll (throttled)
+                                        const now = Date.now();
+                                        if (now - lastScrollTime > 50) { // Scroll every 50ms max
+                                            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                            lastScrollTime = now;
+                                        }
                                     }
-
-                                    // Remove thinking indicator if still showing
-                                    const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
-                                    if (thinkingIndicator) {
-                                        thinkingIndicator.remove();
-                                        contentDiv.style.display = 'block';
+                                    else if (data.type === 'progress') {
+                                        // Update progress bar
+                                        if (!progressBar) {
+                                            progressBar = document.createElement('div');
+                                            progressBar.className = 'chatbot-progress-bar';
+                                            progressBar.innerHTML = '<div class="chatbot-progress-fill"></div>';
+                                            messageDiv.insertBefore(progressBar, contentDiv);
+                                        }
+                                        const progressFill = progressBar.querySelector('.chatbot-progress-fill');
+                                        if (progressFill) {
+                                            progressFill.style.width = `${data.progress}%`;
+                                        }
                                     }
+                                    else if (data.type === 'done') {
+                                        // Remove thinking indicator if still showing
+                                        const thinkingIndicator = messageDiv.querySelector('.chatbot-thinking-indicator');
+                                        if (thinkingIndicator) {
+                                            thinkingIndicator.remove();
+                                            contentDiv.style.display = 'block';
+                                        }
 
-                                    // Remove cursor and typing indicator
-                                    if (typingIndicator) {
-                                        typingIndicator.remove();
+                                        // Remove cursor and typing indicator
+                                        if (typingIndicator) {
+                                            typingIndicator.remove();
+                                        }
+                                        contentDiv.innerHTML = this.formatMessage(fullAnswer);
+
+                                        // Hide progress bar
+                                        if (progressBar) {
+                                            progressBar.remove();
+                                        }
+
+                                        // Sources are no longer displayed - removed
+                                        // if (data.sources && !sources) {
+                                        //     sources = data.sources;
+                                        //     if (sources && sources.length > 0) {
+                                        //         sourcesDiv = this.createSourcesDiv(sources);
+                                        //         messageDiv.insertBefore(sourcesDiv, contentDiv);
+                                        //     }
+                                        // }
+
+                                        // Add images if available
+                                        if (data.cottage_images) {
+                                            images = data.cottage_images;
+                                            this.addImagesToMessage(messageDiv, images);
+                                        }
+
+                                        // Add follow-up actions if available
+                                        if (data.follow_up_actions) {
+                                            this.renderFollowUpActions(messageDiv, data.follow_up_actions);
+                                        }
+
+                                        messageDiv.classList.remove('chatbot-streaming');
+                                        this.messages.push({ role: 'assistant', content: fullAnswer });
+
+                                        // CRITICAL: Hide loading to allow next query
+                                        this.hideLoading();
+                                        this.hideSearching();
+
+                                        // Final scroll
+                                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
                                     }
-                                    contentDiv.innerHTML = this.formatMessage(fullAnswer);
-
-                                    // Hide progress bar
-                                    if (progressBar) {
-                                        progressBar.remove();
+                                    else if (data.type === 'error') {
+                                        throw new Error(data.message);
                                     }
-
-                                    // Sources are no longer displayed - removed
-                                    // if (data.sources && !sources) {
-                                    //     sources = data.sources;
-                                    //     if (sources && sources.length > 0) {
-                                    //         sourcesDiv = this.createSourcesDiv(sources);
-                                    //         messageDiv.insertBefore(sourcesDiv, contentDiv);
-                                    //     }
-                                    // }
-
-                                    // Add images if available
-                                    if (data.cottage_images) {
-                                        images = data.cottage_images;
-                                        this.addImagesToMessage(messageDiv, images);
-                                    }
-
-                                    // Add follow-up actions if available
-                                    if (data.follow_up_actions) {
-                                        this.renderFollowUpActions(messageDiv, data.follow_up_actions);
-                                    }
-
-                                    messageDiv.classList.remove('chatbot-streaming');
-
-                                    // Add to messages array - duplicate check already done above
-                                    this.messages.push({ role: 'assistant', content: fullAnswer });
-
-                                    // Final scroll
-                                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-                                    // Reset sending flag after successful completion
-                                    this._sending = false;
+                                } catch (e) {
+                                    console.error('Error parsing SSE data:', e, line);
                                 }
-                                else if (data.type === 'error') {
-                                    throw new Error(data.message);
-                                }
-                            } catch (e) {
-                                console.error('Error parsing SSE data:', e, line);
                             }
                         }
                     }
+                } else {
+                    // Handle JSON response (non-streaming)
+                    const data = await response.json();
+                    console.log('API Response:', data);
+                    console.log('Cottage images:', data.cottage_images);
+                    this.hideLoading();
+                    this.addMessage(
+                        'assistant',
+                        data.answer,
+                        data.sources,
+                        data.cottage_images || null
+                    );
                 }
-
-                // Reset sending flag after stream completes (in case 'done' event wasn't received)
-                // Note: 'done' event handler also resets it, but this ensures it's reset even if stream ends unexpectedly
-                if (this._sending) {
-                    this._sending = false;
-                }
-
             } catch (error) {
                 console.error('Error sending message:', error);
+                this.hideLoading();
                 this.hideSearching();
 
                 // Remove any indicators
@@ -2232,12 +1584,6 @@
                 if (thinkingIndicator) thinkingIndicator.remove();
                 if (typingIndicator) typingIndicator.remove();
                 if (progressBar) progressBar.remove();
-
-                // Clean up pending message on error
-                if (this.pendingMessages && question) {
-                    const messageKey = `user:${question.trim().toLowerCase()}`;
-                    this.pendingMessages.delete(messageKey);
-                }
 
                 // Show error with retry button
                 const errorMsg = 'Sorry, I encountered an error. Please try again.';
@@ -2262,9 +1608,6 @@
                     }
                 };
                 messageDiv.appendChild(retryBtn);
-
-                // Reset sending flag on error
-                this._sending = false;
             }
         }
 
@@ -2280,8 +1623,15 @@
         }
 
         async startRecording() {
-            // If already recording, don't start again
+            // If already recording, reset state but don't reinitialize everything
             if (this.isRecording && this.audioContext && this.audioContext.state === 'running') {
+                // Reset state for new recording session
+                this.audioBuffer = [];
+                this.voiceDetected = false;
+                this.isProcessingAudio = false;
+                this.isWaitingForResponse = false;
+                this.recordingStartTime = Date.now();
+                console.log('🔄 Recording already active - resetting state for new session');
                 return;
             }
 
@@ -2345,18 +1695,23 @@
                 // Clear audio buffer
                 this.audioBuffer = [];
                 this.voiceDetected = false;
-                this.lastHumanSpeechTime = null;
 
                 // Reset calibration and voice history for new recording session
                 this.backgroundNoiseLevel = 0.0;
                 this.noiseSamples = [];
                 this.isCalibrating = true;
                 this.voiceHistory = [];
+                this.realTimeTranscript = '';
+                this.interimTranscript = '';
+                this.interruptionSpeechHistory = [];
+
+                // Initialize Web Speech API for real-time word detection
+                this.initSpeechRecognition();
 
                 // Process audio data
                 this.audioProcessor.onaudioprocess = (event) => {
-                    // Don't process audio if not recording or waiting for LLM response
-                    if (!this.isRecording || this.isWaitingForResponse) {
+                    // Always process audio if recording (even during TTS for interruption detection)
+                    if (!this.isRecording) {
                         return;
                     }
 
@@ -2367,41 +1722,84 @@
 
                     // If TTS is playing, only check for user interruption (don't collect audio into buffer)
                     // This prevents the agent from listening to its own voice
+                    // IMPORTANT: Audio processor must continue running during TTS to detect interruptions
                     if (this.isPlayingTTS) {
-                        // Use simpler interruption detection during TTS - check RMS energy level
-                        // User voice is typically louder than TTS playback, so use higher threshold
-                        const interruptionThreshold = Math.max(0.025, this.backgroundNoiseLevel * 3);
+                        // Debug: Log occasionally to confirm audio processor is running during TTS
+                        if (Math.random() < 0.01) { // Log 1% of the time to avoid spam
+                            console.log('🔍 Audio processor active during TTS - checking for interruptions...');
+                        }
+                        // STRICT interruption detection during TTS - ONLY accept confirmed human speech
+                        // This prevents interrupting on random noise/voices
+                        const currentTime = Date.now();
 
-                        // Check if user is speaking (higher energy than TTS)
-                        // Interruption: clear human speech detected during agent response
-                        if (voiceCheck.rms > interruptionThreshold) {
-                            // Require clear human speech detection for interruption
-                            if (voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.4) {
-                                // Clear human voice detected - interrupt immediately
-                                console.log('🛑 User interruption detected during TTS playback - RMS:', voiceCheck.rms.toFixed(4), 'confidence:', voiceCheck.confidence?.toFixed(2), 'stopping agent speech');
+                        // ONLY check for confirmed human speech - reject all noise/random voices
+                        const isConfirmedSpeech = voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.35; // Lowered slightly for responsiveness
+                        const hasGoodRMS = voiceCheck.rms > 0.04; // Minimum RMS for valid speech
 
-                                // Stop TTS immediately (this sets isPlayingTTS = false)
+                        // Debug logging (only occasionally to avoid spam)
+                        if (isConfirmedSpeech) {
+                            if (Math.random() < 0.2) { // Log 20% of the time when speech detected
+                                console.log('🔍 Interruption check - RMS:', voiceCheck.rms.toFixed(4), 'isHumanSpeech:', voiceCheck.isHumanSpeech, 'confidence:', voiceCheck.confidence.toFixed(2));
+                            }
+                        }
+
+                        // ONLY process if it's confirmed human speech with good RMS
+                        if (isConfirmedSpeech && hasGoodRMS) {
+                            // Add to interruption speech history
+                            this.interruptionSpeechHistory.push({
+                                time: currentTime,
+                                rms: voiceCheck.rms,
+                                confidence: voiceCheck.confidence,
+                                isHumanSpeech: voiceCheck.isHumanSpeech
+                            });
+
+                            // Remove old history (older than 0.6 seconds - faster response)
+                            this.interruptionSpeechHistory = this.interruptionSpeechHistory.filter(
+                                entry => currentTime - entry.time < 600
+                            );
+
+                            // Interrupt immediately if:
+                            // 1. High energy confirmed speech (RMS > 0.05 and isHumanSpeech), OR
+                            // 2. At least 1 confirmed speech detection with good confidence (>= 0.40)
+                            const highEnergyInterrupt = voiceCheck.rms > 0.05 && voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.40;
+                            const sustainedSpeech = this.interruptionSpeechHistory.length >= 1 && voiceCheck.confidence >= 0.40;
+
+                            if (highEnergyInterrupt || sustainedSpeech) {
+                                // Calculate average confidence
+                                const avgConfidence = this.interruptionSpeechHistory.length > 0
+                                    ? this.interruptionSpeechHistory.reduce(
+                                        (sum, entry) => sum + entry.confidence, 0
+                                    ) / this.interruptionSpeechHistory.length
+                                    : voiceCheck.confidence;
+
+                                console.log('🛑 User interruption detected during TTS playback - RMS:', voiceCheck.rms.toFixed(4), 'Confidence:', avgConfidence.toFixed(2), 'Detections:', this.interruptionSpeechHistory.length, 'stopping agent speech');
                                 this.cancelProcessing();
-
                                 // Start collecting new audio from this point
                                 const buffer = new Float32Array(inputData.length);
                                 buffer.set(inputData);
                                 this.audioBuffer = [buffer];
                                 this.voiceDetected = true;
-                                this.lastHumanSpeechTime = Date.now();
-
-                                // After interruption, isPlayingTTS is false, so we'll continue to collect below
-                                // Don't return here - let it fall through to normal collection
-                            } else {
-                                // Not clear human speech yet, continue monitoring
-                                return; // Don't collect during TTS
+                                this.interruptionSpeechHistory = []; // Reset after interruption
+                                this.startSilenceTimer();
+                                // Exit early - don't return, continue to collect audio
                             }
                         } else {
-                            // Not loud enough, continue monitoring
-                            return; // Don't collect during TTS
+                            // Not confirmed human speech - clear interruption history if no activity for a while
+                            if (this.interruptionSpeechHistory.length > 0) {
+                                const lastDetection = this.interruptionSpeechHistory[this.interruptionSpeechHistory.length - 1];
+                                if (currentTime - lastDetection.time > 300) {
+                                    // Clear if no activity for 300ms (faster clearing)
+                                    this.interruptionSpeechHistory = [];
+                                }
+                            }
                         }
-                        // If we get here, we interrupted and isPlayingTTS is now false
-                        // Continue to normal collection below
+                        // Don't collect audio during TTS - prevents listening to own voice
+                        return;
+                    }
+
+                    // Don't collect audio if waiting for LLM response (but still process for interruption)
+                    if (this.isWaitingForResponse) {
+                        return;
                     }
 
                     // Normal recording mode - collect audio and detect voice
@@ -2409,21 +1807,28 @@
                     buffer.set(inputData);
                     this.audioBuffer.push(buffer);
 
-                    // Only mark as voice detected if it's actually human speech (not noise)
-                    if (voiceCheck.isHumanSpeech) {
+                    // MUCH MORE LENIENT: Set voiceDetected if:
+                    // 1. Confirmed human speech (isHumanSpeech && confidence >= 0.30 && RMS > 0.03), OR
+                    // 2. High RMS (>= 0.05) - indicates significant sound/voice, OR
+                    // 3. Moderate RMS (>= 0.03) with any confidence - allows quieter speech
+                    const isConfirmedHumanSpeech = voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.30 && voiceCheck.rms > 0.03;
+                    const hasHighRMS = voiceCheck.rms >= 0.05; // High RMS indicates voice
+                    const hasModerateRMS = voiceCheck.rms >= 0.03; // Moderate RMS with any confidence
+
+                    if (isConfirmedHumanSpeech || hasHighRMS || hasModerateRMS) {
                         this.voiceDetected = true;
-                        this.lastHumanSpeechTime = Date.now(); // Update timestamp when human speech detected
                         this.consecutiveNoiseCount = 0; // Reset noise counter when speech detected
                         const totalSamples = this.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
                         const duration = totalSamples / this.audioContext.sampleRate;
-                        console.log('🎤 Human speech detected - Confidence:', voiceCheck.confidence.toFixed(2), 'RMS:', voiceCheck.rms.toFixed(4), 'duration:', duration.toFixed(2), 's');
+                        const reason = isConfirmedHumanSpeech ? 'confirmed' : (hasHighRMS ? 'high RMS' : 'moderate RMS');
+                        console.log('🎤 Human speech detected - Confidence:', voiceCheck.confidence.toFixed(2), 'RMS:', voiceCheck.rms.toFixed(4), 'duration:', duration.toFixed(2), 's', `(${reason})`);
 
                         // Restart silence timer on meaningful voice
                         if (!this.isProcessingAudio) {
                             this.startSilenceTimer();
                         }
-                    } else if (voiceCheck.rms > 0.012) {
-                        // There's some sound but it's not human speech (lowered threshold for better detection)
+                    } else if (voiceCheck.rms > 0.01) {
+                        // There's some sound but it's not human speech
                         this.consecutiveNoiseCount++;
 
                         // Only log noise occasionally to reduce console spam:
@@ -2486,6 +1891,12 @@
                 this.silenceTimer = null;
             }
 
+            // Stop speech recognition
+            if (this.speechRecognition) {
+                this.speechRecognition.stop();
+                this.speechRecognition = null;
+            }
+
             // Disconnect audio processor (but don't process audio - user manually stopped)
             if (this.audioProcessor) {
                 this.audioProcessor.disconnect();
@@ -2494,8 +1905,6 @@
 
             // Clear audio buffer since user manually stopped
             this.audioBuffer = [];
-            this.voiceDetected = false;
-            this.lastHumanSpeechTime = null;
 
             // Stop stream tracks
             if (this.audioStream) {
@@ -2510,8 +1919,9 @@
                 voiceBtn.classList.remove('recording');
             }
 
-            // Hide listening message
+            // Hide listening message and clear transcript
             this.hideListeningMessage();
+            this.clearRealTimeTranscript();
         }
 
         async restartRecording() {
@@ -2525,10 +1935,9 @@
                 return;
             }
 
-            // Clear previous audio buffer
+            // Clear previous audio buffer and reset voice detection state
             this.audioBuffer = [];
             this.voiceDetected = false;
-            this.lastHumanSpeechTime = null;
             this.isProcessingAudio = false;
 
             // Small delay to ensure audio context is ready
@@ -2558,78 +1967,80 @@
             }
 
             this.silenceTimer = setTimeout(() => {
-                const currentTime = Date.now();
-                const timeSinceLastSpeech = this.lastHumanSpeechTime ? (currentTime - this.lastHumanSpeechTime) : Infinity;
-
-                // Silence means no human speech detected in the last 2 seconds
-                const isSilence = !this.lastHumanSpeechTime || timeSinceLastSpeech >= 2000;
-
-                console.log('⏰ Silence timer fired after 2 seconds. Time since last human speech:', timeSinceLastSpeech, 'ms');
+                console.log('⏰ Silence timer fired after 2 seconds');
 
                 // Only process if:
                 // 1. We have audio buffers
-                // 2. We detected actual voice (not just silence/noise)
-                // 3. We have enough audio data (at least 1.0 seconds)
-                // 4. We're not already processing
-                // 5. TTS is not playing (don't process during agent speech)
-                // 6. No human speech detected in the last 2 seconds (true silence)
-                if (this.audioBuffer.length > 0 && !this.isProcessingAudio && this.voiceDetected && !this.isPlayingTTS && isSilence) {
+                // 2. We have enough audio data (at least 0.5 seconds)
+                // 3. We're not already processing
+                // 4. TTS is not playing (don't process during agent speech)
+                // Note: We'll check voice detection in handleSilenceDetected, but allow processing if we have reasonable audio
+                if (this.audioBuffer.length > 0 && !this.isProcessingAudio && !this.isPlayingTTS) {
                     const totalSamples = this.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
-                    const minSamples = this.audioContext ? (this.audioContext.sampleRate * 1.0) : 16000; // At least 1.0 seconds
+                    const minSamples = this.audioContext ? (this.audioContext.sampleRate * 0.5) : 16000; // At least 0.5 seconds
                     const duration = totalSamples / (this.audioContext ? this.audioContext.sampleRate : 16000);
+
+                    // Calculate average RMS of audio buffers to check if there's reasonable audio
+                    let totalRMS = 0;
+                    let rmsCount = 0;
+                    for (const buf of this.audioBuffer) {
+                        const rms = this.calculateRMS(buf);
+                        totalRMS += rms;
+                        rmsCount++;
+                    }
+                    const avgRMS = rmsCount > 0 ? totalRMS / rmsCount : 0;
 
                     console.log('📊 Audio stats:', {
                         buffers: this.audioBuffer.length,
                         totalSamples: totalSamples,
                         duration: duration.toFixed(2) + 's',
                         voiceDetected: this.voiceDetected,
-                        timeSinceLastSpeech: timeSinceLastSpeech + 'ms',
+                        avgRMS: avgRMS.toFixed(4),
                         minRequired: minSamples
                     });
 
-                    if (totalSamples >= minSamples && this.voiceDetected) {
-                        console.log('🔇 2 seconds of silence (no human speech) detected, processing audio...', this.audioBuffer.length, 'buffers, total samples:', totalSamples);
+                    // Process if we have enough audio AND either:
+                    // 1. Voice was detected, OR
+                    // 2. Average RMS is reasonable (>= 0.02) - indicates there was some sound
+                    if (totalSamples >= minSamples && (this.voiceDetected || avgRMS >= 0.02)) {
+                        console.log('🔇 2 seconds of silence detected, processing audio...', this.audioBuffer.length, 'buffers, total samples:', totalSamples, 'voiceDetected:', this.voiceDetected, 'avgRMS:', avgRMS.toFixed(4));
                         this.handleSilenceDetected();
                     } else {
                         console.log('⚠️ Silence detected but:', {
                             totalSamples: totalSamples,
                             minRequired: minSamples,
                             voiceDetected: this.voiceDetected,
-                            reason: totalSamples < minSamples ? 'audio too short (need 1.0s)' : 'no voice detected'
+                            avgRMS: avgRMS.toFixed(4),
+                            reason: totalSamples < minSamples ? 'audio too short (need 0.5s)' : (avgRMS < 0.02 ? 'RMS too low (likely silence)' : 'no voice detected')
                         });
                         // Reset and continue recording
                         this.audioBuffer = [];
                         this.voiceDetected = false;
-                        this.lastHumanSpeechTime = null;
-                        this.lastHumanSpeechTime = null;
                         if (this.isRecording && !this.isProcessingAudio) {
                             this.startSilenceTimer(); // Restart timer
                         }
                     }
                 } else {
-                    // If human speech was detected recently, don't process - wait for true silence
-                    if (!isSilence) {
-                        console.log('⚠️ Silence timer fired but human speech detected recently, restarting timer...');
-                        if (this.isRecording && !this.isProcessingAudio) {
-                            this.startSilenceTimer(); // Restart timer
-                        }
-                        return;
-                    }
-
                     console.log('⚠️ Silence timer fired but not processing:', {
                         buffers: this.audioBuffer.length,
                         processing: this.isProcessingAudio,
                         recording: this.isRecording,
                         voiceDetected: this.voiceDetected,
-                        isSilence: isSilence
+                        isPlayingTTS: this.isPlayingTTS
                     });
-                    // Reset if no voice was detected AND we've been waiting too long
-                    // But keep some buffer in case user is just starting to speak
-                    if (!this.voiceDetected && this.audioBuffer.length > 20) {
-                        // Only clear if we have a lot of buffers (more than 1 second of audio)
-                        // This prevents clearing audio when user is just starting to speak
+                    // Reset if no voice was detected and no reasonable audio
+                    if (!this.voiceDetected && this.audioBuffer.length > 0) {
+                        // Check RMS before clearing
+                        let totalRMS = 0;
+                        for (const buf of this.audioBuffer) {
+                            totalRMS += this.calculateRMS(buf);
+                        }
+                        const avgRMS = this.audioBuffer.length > 0 ? totalRMS / this.audioBuffer.length : 0;
+                        if (avgRMS < 0.02) {
+                            this.audioBuffer = [];
+                        }
+                    } else if (!this.voiceDetected) {
                         this.audioBuffer = [];
-                        this.lastHumanSpeechTime = null;
                     }
                     // Restart timer if we're still recording and not processing
                     if (this.isRecording && !this.isProcessingAudio) {
@@ -2638,7 +2049,7 @@
                     }
                 }
                 this.silenceTimer = null;
-            }, 2000); // 2 seconds silence detection - no human speech for 2 seconds
+            }, 2000);
         }
 
         handleSilenceDetected() {
@@ -2655,21 +2066,34 @@
                 return;
             }
 
-            // Only process if we have audio buffers AND voice was detected
-            if (this.audioBuffer.length === 0 || !this.voiceDetected) {
-                console.log('⚠️ Silence detected but no valid audio to process:', {
-                    buffers: this.audioBuffer.length,
-                    voiceDetected: this.voiceDetected
-                });
+            // Process if we have audio buffers (voice detection will be checked in processAudioChunks)
+            if (this.audioBuffer.length === 0) {
+                console.log('⚠️ Silence detected but no audio buffers to process');
                 // Reset and continue
                 this.audioBuffer = [];
                 this.voiceDetected = false;
-                this.lastHumanSpeechTime = null;
+                return;
+            }
+
+            // Calculate average RMS to verify there's reasonable audio
+            let totalRMS = 0;
+            for (const buf of this.audioBuffer) {
+                totalRMS += this.calculateRMS(buf);
+            }
+            const avgRMS = this.audioBuffer.length > 0 ? totalRMS / this.audioBuffer.length : 0;
+
+            // Process if we have reasonable audio (RMS >= 0.02) even if voiceDetected is false
+            // The validation in processAudioChunks will do the final check
+            if (avgRMS < 0.02 && !this.voiceDetected) {
+                console.log('⚠️ Silence detected but audio RMS too low:', avgRMS.toFixed(4), 'voiceDetected:', this.voiceDetected);
+                this.audioBuffer = [];
+                this.voiceDetected = false;
                 return;
             }
 
             // Process audio directly (Web Audio API doesn't need to stop like MediaRecorder)
             console.log('🛑 Processing audio from Web Audio API...');
+            console.log('📊 Pre-processing check - voiceDetected:', this.voiceDetected, 'buffers:', this.audioBuffer.length, 'avgRMS:', avgRMS.toFixed(4));
             this.processAudioChunks();
         }
 
@@ -2864,12 +2288,13 @@
             // Calibrate background noise during first 2 seconds
             this.calibrateBackgroundNoise(audioData);
 
-            // Use adaptive threshold (3x background noise, minimum 0.012 - balanced for better detection)
-            const adaptiveThreshold = Math.max(0.012, this.backgroundNoiseLevel * 3);
+            // Use adaptive threshold (5x background noise, minimum 0.03 for better detection)
+            // Lowered minimum to 0.03 to allow short words like "hello" while still filtering noise
+            const adaptiveThreshold = Math.max(0.03, this.backgroundNoiseLevel * 5);
 
-            // Minimum energy threshold - filter out very quiet sounds
+            // Minimum energy threshold - filter out very quiet sounds, clicks, and transient noises
             if (rms < adaptiveThreshold) {
-                return result; // Too quiet, likely silence
+                return result; // Too quiet, likely silence or noise
             }
 
             // 2. Zero Crossing Rate (ZCR) - speech has higher ZCR than noise
@@ -2883,9 +2308,9 @@
             const zcr = zeroCrossings / length;
 
             // Speech typically has ZCR between 0.1 and 0.5
-            // Button clicks have very high ZCR (>0.6)
+            // Button clicks have very high ZCR (>0.5) - made stricter
             // Fan/traffic noise has very low ZCR (<0.05)
-            if (zcr > 0.6) {
+            if (zcr > 0.5) {
                 result.noiseType = 'click';
                 return result; // Likely a button click or sharp sound
             }
@@ -2910,8 +2335,9 @@
             variance = variance / length;
             const energyVariance = Math.sqrt(variance);
 
-            // Constant noise (fan, traffic) has low variance - stricter threshold
-            if (energyVariance < 0.004 && rms < 0.025) {
+            // Constant noise (fan, traffic) has low variance
+            // Increased RMS threshold to 0.05 to match stricter validation
+            if (energyVariance < 0.003 && rms < 0.05) {
                 result.noiseType = 'constant_noise';
                 return result; // Likely constant background noise
             }
@@ -2935,10 +2361,11 @@
                     return result;
                 }
 
-                // Only reject if speech ratio is extremely low AND we have good frequency data
-                if (freqFeatures.speechRatio > 0 && freqFeatures.speechRatio < 0.1) {
+                // Stricter: reject if speech ratio is low (increased from 0.1 to 0.15)
+                // This matches backend VAD's frequency filtering requirements
+                if (freqFeatures.speechRatio > 0 && freqFeatures.speechRatio < 0.15) {
                     result.noiseType = 'low_speech_energy';
-                    return result; // Extremely low energy in speech band
+                    return result; // Low energy in speech band (300-3400 Hz)
                 }
 
                 // Spectral rolloff check - only reject if extremely abnormal
@@ -2965,13 +2392,13 @@
             const peakDensity = peaks / length;
 
             // Speech has moderate peak density (0.1-0.3)
-            // Button clicks have very high peak density (>0.4)
+            // Button clicks have very high peak density (>0.35) - made stricter
             // Constant noise has very low peak density (<0.05)
-            if (peakDensity > 0.4) {
+            if (peakDensity > 0.35) {
                 result.noiseType = 'click';
                 return result; // Likely a click or sharp sound
             }
-            if (peakDensity < 0.05 && rms < 0.025) {
+            if (peakDensity < 0.05 && rms < 0.05) {
                 result.noiseType = 'constant_noise';
                 return result; // Likely constant noise
             }
@@ -3019,10 +2446,10 @@
                 spectralScore * 0.15                // Spectral centroid: 15%
             );
 
-            // 7. Temporal Continuity - require sustained voice detection (more lenient)
+            // 7. Temporal Continuity - require sustained voice detection (more lenient for short words)
             const currentTime = Date.now();
 
-            // Add to voice history if confidence is reasonable (lowered for better detection)
+            // Add to voice history if confidence is reasonable (lowered threshold for better detection)
             if (confidence >= 0.30) {
                 this.voiceHistory.push({
                     time: currentTime,
@@ -3030,17 +2457,23 @@
                 });
             }
 
-            // Remove old history (older than 1.2 seconds - balanced window)
+            // Remove old history (older than 1.0 seconds - shorter window for faster detection)
             this.voiceHistory = this.voiceHistory.filter(
-                entry => currentTime - entry.time < 1200
+                entry => currentTime - entry.time < 1000
             );
 
-            // Require at least 2 detections in last 1.2 seconds for sustained speech
-            // OR if confidence is very high (>0.60), accept immediately
-            if (confidence < 0.60 && this.voiceHistory.length < 2) {
+            // More lenient: require at least 2 detections in last 1.0 seconds (reduced from 4)
+            // OR if confidence is very high (>0.70), require at least 1 detection
+            // This allows short words like "hello" to be detected
+            if (confidence < 0.70 && this.voiceHistory.length < 2) {
                 result.noiseType = 'too_brief';
                 result.confidence = confidence;
                 return result; // Too brief to be speech
+            }
+            if (confidence >= 0.70 && this.voiceHistory.length < 1) {
+                result.noiseType = 'too_brief';
+                result.confidence = confidence;
+                return result; // Even high confidence needs at least one detection
             }
 
             // Calculate average confidence over time
@@ -3052,29 +2485,33 @@
             }
 
             // Use dynamic threshold based on background noise (more lenient for better detection)
-            const dynamicThreshold = Math.max(0.30, 0.30 + (this.backgroundNoiseLevel * 1.2));
+            // Lowered minimum to 0.45 to allow short words like "hello" to be detected
+            const dynamicThreshold = Math.max(0.45, 0.45 + (this.backgroundNoiseLevel * 10));
 
             // Final decision: combine current confidence with temporal average
-            // Require at least 2 detections for temporal averaging (more responsive)
+            // If we have history, use weighted average; otherwise use current confidence
             const finalConfidence = this.voiceHistory.length >= 2
-                ? (confidence * 0.7) + (avgConfidence * 0.3)
+                ? (confidence * 0.6) + (avgConfidence * 0.4)
                 : confidence;
 
-            // More lenient threshold - detect human speech more easily
-            // Lower RMS requirement for quieter speech
-            if (finalConfidence >= dynamicThreshold && rms >= 0.012) {
+            // Additional check: require minimum RMS even if confidence is high
+            // This prevents low-energy clicks from being accepted
+            // Lowered to 0.03 to allow short words like "hello" (but still reject clicks)
+            const minRMSForSpeech = 0.03; // Minimum RMS for actual speech (more lenient)
+
+            if (finalConfidence >= dynamicThreshold && rms >= minRMSForSpeech) {
                 result.isHumanSpeech = true;
                 result.confidence = Math.min(finalConfidence, 1.0);
                 // Debug logging for successful detection
-                if (this.voiceHistory.length % 10 === 0) { // Log every 10th detection to avoid spam
-                    console.log('✅ Human speech detected - Confidence:', finalConfidence.toFixed(2), 'RMS:', rms.toFixed(4), 'Threshold:', dynamicThreshold.toFixed(2));
+                if (Math.random() < 0.1) { // Log 10% of detections to avoid spam
+                    console.log('✅ Speech detected - RMS:', rms.toFixed(4), 'Confidence:', finalConfidence.toFixed(2), 'Threshold:', dynamicThreshold.toFixed(2), 'History:', this.voiceHistory.length);
                 }
             } else {
                 result.noiseType = 'low_confidence';
                 result.confidence = finalConfidence;
-                // Debug logging for failed detection (less frequent)
-                if (this.voiceHistory.length % 50 === 0) { // Log every 50th to see why it's failing
-                    console.log('❌ Not detected as speech - Confidence:', finalConfidence.toFixed(2), 'RMS:', rms.toFixed(4), 'Threshold:', dynamicThreshold.toFixed(2), 'Required RMS:', 0.012);
+                // Debug logging for rejected detection
+                if (rms > 0.02 && Math.random() < 0.05) { // Log 5% of rejections with reasonable RMS
+                    console.log('❌ Speech rejected - RMS:', rms.toFixed(4), 'Confidence:', finalConfidence.toFixed(2), 'Threshold:', dynamicThreshold.toFixed(2), 'MinRMS:', minRMSForSpeech.toFixed(3), 'History:', this.voiceHistory.length, 'Reason:', finalConfidence < dynamicThreshold ? 'low_confidence' : 'low_rms');
                 }
             }
 
@@ -3139,25 +2576,8 @@
             }
 
             try {
-                // Validate voice was detected first
-                if (!this.voiceDetected) {
-                    console.warn('⚠️ Audio invalid: no human speech detected');
-                    this.isProcessingAudio = false;
-                    this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
-                    this.voiceDetected = false;
-                    this.lastHumanSpeechTime = null;
-                    this.audioBuffer = [];
-                    // Hide messages
-                    this.hideLoading();
-                    this.hideListeningMessage();
-                    // Restart recording immediately
-                    if (this.isRecording) {
-                        this.restartRecording();
-                    }
-                    return;
-                }
-
                 // Combine all audio buffers into one Float32Array
+                // Don't reject early - let validation check RMS and speech ratio instead
                 const totalLength = this.audioBuffer.reduce((sum, buf) => sum + buf.length, 0);
                 if (totalLength === 0) {
                     console.warn('⚠️ No audio data to process');
@@ -3176,13 +2596,12 @@
                 const sampleRate = this.audioContext.sampleRate;
                 const duration = totalLength / sampleRate;
 
-                // Need at least 0.5 seconds of audio to be valid (reduced from 0.8s for better responsiveness)
-                if (duration < 0.5) {
-                    console.warn('⚠️ Audio too short:', duration.toFixed(2), 's (need at least 0.5s)');
+                // Need at least 0.3 seconds of audio to be valid
+                if (duration < 0.3) {
+                    console.warn('⚠️ Audio too short:', duration.toFixed(2), 's (need at least 0.3s)');
                     this.isProcessingAudio = false;
                     this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
                     this.voiceDetected = false;
-                    this.lastHumanSpeechTime = null;
                     this.audioBuffer = [];
                     // Hide messages
                     this.hideLoading();
@@ -3199,6 +2618,7 @@
                 const chunkSize = Math.floor(sampleRate * 0.1); // 100ms chunks
                 let validSpeechChunks = 0;
                 let totalChunks = 0;
+                let chunksWithVoice = 0; // Track chunks with any voice energy
 
                 for (let i = 0; i < combinedBuffer.length - chunkSize; i += chunkSize) {
                     const chunk = combinedBuffer.slice(i, i + chunkSize);
@@ -3207,31 +2627,122 @@
                     if (voiceCheck.isHumanSpeech) {
                         validSpeechChunks++;
                     }
+                    // Count chunks with confirmed human speech (not just RMS - must be actual speech)
+                    // Only count if it's confirmed human speech with good RMS
+                    if (voiceCheck.isHumanSpeech && voiceCheck.confidence >= 0.35 && voiceCheck.rms > 0.04) {
+                        chunksWithVoice++;
+                    }
                 }
 
-                // At least 5% of chunks should contain human speech if voice was detected during recording
-                // Otherwise require 10% (lowered from 20% - natural speech has pauses)
-                // This accounts for pauses in natural speech and background noise
+                // STRICT: Only accept confirmed human speech - reject random noise/voices
+                // At least 15% of chunks must contain confirmed human speech (or 10% if voice was detected)
                 const speechRatio = validSpeechChunks / totalChunks;
-                const requiredRatio = this.voiceDetected ? 0.05 : 0.10; // Lower threshold if voice was detected
-                if (speechRatio < requiredRatio) {
-                    console.warn('⚠️ Audio contains mostly noise, not human speech. Speech ratio:', speechRatio.toFixed(2), `(need at least ${(requiredRatio * 100).toFixed(0)}%)`);
-                    this.isProcessingAudio = false;
-                    this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
+                const voiceEnergyRatio = chunksWithVoice / totalChunks;
+
+                // Process if:
+                // 1. Voice was detected during recording (this.voiceDetected = true), AND
+                // 2. Speech ratio >= 10% (more lenient for short utterances) OR speech ratio >= 15% (for longer speech)
+                // More lenient: allow processing if RMS is reasonable even if voiceDetected is false
+                // But still require some speech ratio to avoid pure noise
+                const minSpeechRatio = this.voiceDetected ? 0.10 : 0.15; // More lenient if voice was detected
+
+                // Calculate average RMS of the entire audio
+                const avgRMS = this.calculateRMS(combinedBuffer);
+
+                // If speech ratio is 0.00, voiceDetected flag is likely stale - reset it
+                if (speechRatio === 0.00 && this.voiceDetected) {
+                    console.log('⚠️ Speech ratio is 0.00 but voiceDetected is true - resetting voiceDetected flag');
                     this.voiceDetected = false;
-                    this.lastHumanSpeechTime = null;
+                }
+
+                // MUCH MORE LENIENT: Process if:
+                // 1. Voice was detected, OR
+                // 2. High RMS (>= 0.045) - indicates significant sound/voice, OR
+                // 3. Moderate RMS (>= 0.02) with some speech (>= 3%)
+                const hasHighRMS = avgRMS >= 0.045; // Lowered threshold slightly (was 0.05) to catch 0.0470
+                const hasModerateRMS = avgRMS >= 0.02; // Moderate RMS
+                const hasSomeSpeech = speechRatio >= 0.03; // At least 3% speech (very lenient)
+
+                // If RMS is high, process regardless of voiceDetected or speech ratio
+                if (hasHighRMS) {
+                    console.log('✅ Processing audio with high RMS:', avgRMS.toFixed(4), '(high RMS indicates voice)');
+                    // Set voiceDetected retroactively for high RMS
+                    this.voiceDetected = true;
+                } else if (!this.voiceDetected && !(hasModerateRMS && hasSomeSpeech)) {
+                    console.warn('⚠️ Audio rejected - no voice detected and RMS/speech too low. Speech ratio:', speechRatio.toFixed(2), 'Voice energy ratio:', voiceEnergyRatio.toFixed(2), 'Avg RMS:', avgRMS.toFixed(4));
+                    this.isProcessingAudio = false;
+                    this.isWaitingForResponse = false;
+                    this.voiceDetected = false;
                     this.audioBuffer = [];
-                    // Hide messages
                     this.hideLoading();
                     this.hideListeningMessage();
-                    // Restart recording immediately
-                    if (this.isRecording) {
-                        this.restartRecording();
+                    // Don't restart immediately - let silence timer handle it to avoid loops
+                    if (this.isRecording && this.silenceTimer) {
+                        // Timer is already running, just clear buffer and let it continue
+                    } else if (this.isRecording) {
+                        // Start a new timer after a short delay
+                        setTimeout(() => {
+                            if (this.isRecording && !this.isProcessingAudio) {
+                                this.startSilenceTimer();
+                            }
+                        }, 500);
                     }
                     return;
                 }
 
-                console.log('✅ Speech validation passed - Speech ratio:', speechRatio.toFixed(2), `(${(requiredRatio * 100).toFixed(0)}%+ required)`);
+                // If voiceDetected is false but we have reasonable RMS and some speech, use lower threshold
+                // Or if RMS is high, be very lenient with speech ratio
+                // Also: if RMS is high (>= 0.045), don't require speech ratio at all
+                const effectiveMinRatio = hasHighRMS ? 0.00 : (this.voiceDetected || (hasModerateRMS && hasSomeSpeech)) ? 0.10 : 0.15;
+
+                if (speechRatio < effectiveMinRatio && !hasHighRMS) {
+                    console.warn('⚠️ Audio contains mostly noise, not human speech. Speech ratio:', speechRatio.toFixed(2), 'Voice energy ratio:', voiceEnergyRatio.toFixed(2), 'Voice detected:', this.voiceDetected, 'Avg RMS:', avgRMS.toFixed(4), `(need at least ${(effectiveMinRatio * 100).toFixed(0)}% confirmed human speech)`);
+                    this.isProcessingAudio = false;
+                    this.isWaitingForResponse = false;
+                    this.voiceDetected = false;
+                    this.audioBuffer = [];
+                    this.hideLoading();
+                    this.hideListeningMessage();
+                    // Don't restart immediately - let silence timer handle it to avoid loops
+                    if (this.isRecording && this.silenceTimer) {
+                        // Timer is already running, just clear buffer and let it continue
+                    } else if (this.isRecording) {
+                        // Start a new timer after a short delay
+                        setTimeout(() => {
+                            if (this.isRecording && !this.isProcessingAudio) {
+                                this.startSilenceTimer();
+                            }
+                        }, 500);
+                    }
+                    return;
+                }
+
+                // Final RMS check - only reject if RMS is very low (likely silence)
+                const minRMS = 0.01; // Very lenient - only reject near-silence
+
+                if (avgRMS < minRMS) {
+                    console.warn('⚠️ Audio RMS too low (near silence):', avgRMS.toFixed(4), `(need at least ${minRMS.toFixed(3)})`);
+                    this.isProcessingAudio = false;
+                    this.isWaitingForResponse = false;
+                    this.voiceDetected = false;
+                    this.audioBuffer = [];
+                    this.hideLoading();
+                    this.hideListeningMessage();
+                    // Don't restart immediately - let silence timer handle it to avoid loops
+                    if (this.isRecording && this.silenceTimer) {
+                        // Timer is already running, just clear buffer and let it continue
+                    } else if (this.isRecording) {
+                        // Start a new timer after a short delay
+                        setTimeout(() => {
+                            if (this.isRecording && !this.isProcessingAudio) {
+                                this.startSilenceTimer();
+                            }
+                        }, 500);
+                    }
+                    return;
+                }
+
+                console.log('✅ Speech validation passed - Speech ratio:', speechRatio.toFixed(2), 'Voice energy ratio:', voiceEnergyRatio.toFixed(2), 'Avg RMS:', avgRMS.toFixed(4));
 
                 console.log('✅ Audio validation passed - Speech ratio:', speechRatio.toFixed(2), 'Duration:', duration.toFixed(2), 's');
 
@@ -3247,7 +2758,6 @@
                     this.isProcessingAudio = false;
                     this.isWaitingForResponse = false; // Reset waiting flag so recording can restart
                     this.voiceDetected = false;
-                    this.lastHumanSpeechTime = null;
                     this.audioBuffer = [];
                     // Hide messages
                     this.hideLoading();
@@ -3324,70 +2834,33 @@
 
             // Stop current TTS audio playback immediately
             if (this.currentAudio) {
-                try {
-                    // Check if audio is already paused to avoid AbortError
-                    if (!this.currentAudio.paused) {
-                        this.currentAudio.pause();
-                    }
-                    this.currentAudio.currentTime = 0; // Reset to beginning
-
-                    // Clear event handlers to prevent them from firing
-                    this.currentAudio.onended = null;
-                    this.currentAudio.onerror = null;
-                    this.currentAudio.onpause = null;
-
-                    // Remove event listeners if they exist
-                    if (this.currentAudio._onEnded) {
-                        this.currentAudio.removeEventListener('ended', this.currentAudio._onEnded);
-                    }
-                    if (this.currentAudio._onError) {
-                        this.currentAudio.removeEventListener('error', this.currentAudio._onError);
-                    }
-                } catch (e) {
-                    // Ignore errors - audio might already be stopped
-                    console.warn('Error stopping audio (ignoring):', e);
-                }
+                this.currentAudio.pause();
+                this.currentAudio.currentTime = 0; // Reset to beginning
                 this.currentAudio = null;
             }
+
+            // Mark TTS as not playing so we can start collecting audio
+            this.isPlayingTTS = false;
 
             // Cancel any pending processing
             this.isProcessingAudio = false;
             this.isWaitingForResponse = false;
-            this.isPlayingTTS = false; // TTS is no longer playing - CRITICAL for interruption to work
-
-            // Hide any loading/thinking messages
-            this.hideLoading();
-            this.hideListeningMessage();
+            this.isPlayingTTS = false; // TTS is no longer playing
 
             // Don't clear voiceDetected if we just interrupted - we want to keep collecting
             // Only clear if we're not in the middle of an interruption
             if (!this.voiceDetected) {
                 this.audioBuffer = [];
-                this.lastHumanSpeechTime = null;
             }
             // voiceDetected stays true if we interrupted, so we continue collecting
 
-            // Immediately start listening for user input after interruption
+            // Restart silence timer if still recording
             if (this.isRecording && this.audioContext && this.audioContext.state === 'running') {
-                // Small delay to ensure audio processing resumes and TTS flag is cleared
+                // Small delay to ensure audio processing resumes
                 setTimeout(() => {
-                    // Double-check TTS is stopped
-                    if (this.currentAudio) {
-                        try {
-                            if (!this.currentAudio.paused) {
-                                this.currentAudio.pause();
-                            }
-                        } catch (e) {
-                            // Ignore errors
-                        }
-                        this.currentAudio = null;
-                    }
-                    this.isPlayingTTS = false; // Ensure flag is cleared
-
-                    // Start silence timer to listen for user input
                     this.startSilenceTimer();
                     console.log('🔄 Recording restarted after interruption - ready for user input');
-                }, 50); // Reduced delay for faster response
+                }, 100);
             }
         }
 
@@ -3398,8 +2871,6 @@
 
             return new Promise((resolve, reject) => {
                 const wsUrl = this.apiUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/voice';
-                // const wsUrl = 'wss://swisscottagesbhurban.com/ws/voice';
-
                 console.log('🔌 Connecting to WebSocket:', wsUrl);
                 console.log('   API URL:', this.apiUrl);
 
@@ -3485,72 +2956,13 @@
             this.audioBuffer = [];
 
             // Display user's question if provided
-            // NOTE: For voice, the question should already be added when recording stops
-            // Only add if it's not already in the messages array or DOM to prevent duplicates
             if (data.question) {
-                const questionText = data.question.trim();
-                const normalizedQuestion = questionText.trim().toLowerCase();
-
-                // Check messages array
-                const alreadyInArray = this.messages.some(msg =>
-                    msg.role === 'user' && msg.content.trim().toLowerCase() === normalizedQuestion
-                );
-
-                // Check DOM
-                const messagesContainer = document.getElementById('chatbot-messages');
-                let alreadyInDOM = false;
-                if (messagesContainer) {
-                    const existingUserMessages = messagesContainer.querySelectorAll('.chatbot-message-user:not(.chatbot-streaming)');
-                    for (const msg of existingUserMessages) {
-                        const msgContent = msg.querySelector('.chatbot-message-content');
-                        if (msgContent) {
-                            const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
-                            if (existingText === normalizedQuestion) {
-                                alreadyInDOM = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!alreadyInArray && !alreadyInDOM) {
-                    this.addMessage('user', questionText);
-                } else {
-                    console.log('⚠️ User question already exists (in array or DOM), skipping duplicate:', questionText.substring(0, 50));
-                }
+                this.addMessage('user', data.question);
             }
 
             // Display assistant's response
             if (data.text) {
-                const normalizedText = data.text.trim().toLowerCase();
-
-                // Check messages array
-                const alreadyInArray = this.messages.some(msg =>
-                    msg.role === 'assistant' && msg.content.trim().toLowerCase() === normalizedText
-                );
-
-                // Check DOM
-                const messagesContainer = document.getElementById('chatbot-messages');
-                let alreadyInDOM = false;
-                if (messagesContainer) {
-                    const existingAssistantMessages = messagesContainer.querySelectorAll('.chatbot-message-assistant:not(.chatbot-streaming)');
-                    for (const msg of existingAssistantMessages) {
-                        const msgContent = msg.querySelector('.chatbot-message-content');
-                        if (msgContent) {
-                            const existingText = (msgContent.textContent || msgContent.innerText || '').trim().toLowerCase();
-                            if (existingText === normalizedText) {
-                                alreadyInDOM = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!alreadyInArray && !alreadyInDOM) {
-                    this.addMessage('assistant', data.text);
-                } else {
-                    console.log('⚠️ Assistant response already exists (in array or DOM), skipping duplicate:', data.text.substring(0, 50));
-                }
+                this.addMessage('assistant', data.text);
             }
 
             if (data.audio) {
@@ -3593,22 +3005,15 @@
                 // We don't disconnect - microphone stays connected to detect user interruptions
                 this.audioBuffer = [];
                 this.voiceDetected = false;
-                this.lastHumanSpeechTime = null;
 
                 const audio = new Audio(audioUrl);
                 this.currentAudio = audio;
 
-                // Store references for cleanup
-                audio._onEnded = audio.onended;
-                audio._onError = audio.onerror;
-
-                // Handle user interruption during playback - pause event
+                // Handle user interruption during playback
                 audio.addEventListener('pause', () => {
-                    if (this.isPlayingTTS) {
-                        console.log('🛑 TTS playback paused - marking as interrupted');
+                    if (this.isPlayingTTS && this.currentAudio && this.currentAudio.paused) {
+                        console.log('🛑 TTS playback paused by user interruption');
                         this.isPlayingTTS = false;
-                        // Don't call cancelProcessing here to avoid double-processing
-                        // The audio processor will detect the interruption
                     }
                 });
 
@@ -3629,17 +3034,9 @@
                 };
 
                 audio.play().catch(error => {
-                    // Handle AbortError gracefully - it means audio was interrupted by pause()
-                    if (error.name === 'AbortError' || error.message?.includes('interrupted') || error.message?.includes('pause')) {
-                        console.log('🔇 Audio playback was interrupted (user spoke) - this is expected');
-                        this.isPlayingTTS = false;
-                        // Don't reject - this is a valid interruption, resolve instead
-                        resolve();
-                    } else {
-                        console.error('Error starting audio playback:', error);
-                        this.isPlayingTTS = false; // Failed to play, mark as not playing
-                        reject(error);
-                    }
+                    console.error('Error starting audio playback:', error);
+                    this.isPlayingTTS = false; // Failed to play, mark as not playing
+                    reject(error);
                 });
             });
         }
@@ -3647,31 +3044,74 @@
 
     // Auto-initialize when DOM is ready
     function initWidget() {
-        // Prevent multiple initializations
-        if (window.chatbotWidget) {
-            console.log('⚠️ Chatbot widget already initialized, skipping');
-            return;
+        try {
+            console.log('🚀 Starting chatbot widget initialization...');
+            console.log('Document ready state:', document.readyState);
+            console.log('Document body exists:', !!document.body);
+
+            // Get configuration from script tag or data attributes
+            const script = document.currentScript ||
+                document.querySelector('script[src*="chatbot-widget.js"]');
+
+            console.log('Script element found:', !!script);
+            if (script) {
+                console.log('Script dataset:', script.dataset);
+                console.log('Script src:', script.src);
+            }
+
+            const config = {
+                apiUrl: script?.dataset?.apiUrl || null,
+                theme: script?.dataset?.theme || 'light',
+                position: script?.dataset?.position || 'bottom-right',
+                primaryColor: script?.dataset?.primaryColor || '#007bff',
+            };
+
+            // Initialize widget
+            console.log('Initializing chatbot widget with config:', config);
+            window.chatbotWidget = new ChatbotWidget(config);
+            console.log('Chatbot widget initialized successfully', window.chatbotWidget);
+
+            // Verify widget is in DOM
+            setTimeout(() => {
+                const widgetElement = document.getElementById('chatbot-widget');
+                if (widgetElement) {
+                    console.log('✅ Widget element found in DOM:', widgetElement);
+                    const styles = window.getComputedStyle(widgetElement);
+                    console.log('Widget position:', styles.position);
+                    console.log('Widget display:', styles.display);
+                    console.log('Widget visibility:', styles.visibility);
+                    console.log('Widget z-index:', styles.zIndex);
+                    console.log('Widget bottom:', styles.bottom);
+                    console.log('Widget right:', styles.right);
+                    console.log('Widget classes:', widgetElement.className);
+
+                    const toggleButton = document.getElementById('chatbot-toggle');
+                    if (toggleButton) {
+                        const toggleStyles = window.getComputedStyle(toggleButton);
+                        console.log('✅ Toggle button found');
+                        console.log('Toggle display:', toggleStyles.display);
+                        console.log('Toggle visibility:', toggleStyles.visibility);
+                        console.log('Toggle width:', toggleStyles.width);
+                        console.log('Toggle height:', toggleStyles.height);
+                    } else {
+                        console.error('❌ Toggle button NOT found!');
+                    }
+                } else {
+                    console.error('❌ Widget element NOT found in DOM!');
+                }
+            }, 100);
+        } catch (error) {
+            console.error('❌ Error initializing chatbot widget:', error);
+            console.error('Error stack:', error.stack);
         }
-
-        // Get configuration from script tag or data attributes
-        const script = document.currentScript ||
-            document.querySelector('script[src*="chatbot-widget.js"]');
-
-        const config = {
-            apiUrl: script?.dataset?.apiUrl || null,
-            theme: script?.dataset?.theme || 'light',
-            position: script?.dataset?.position || 'bottom-right',
-            primaryColor: script?.dataset?.primaryColor || '#007bff',
-        };
-
-        // Initialize widget
-        window.chatbotWidget = new ChatbotWidget(config);
     }
 
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {
+        console.log('Document is loading, waiting for DOMContentLoaded...');
         document.addEventListener('DOMContentLoaded', initWidget);
     } else {
+        console.log('Document already ready, initializing immediately...');
         initWidget();
     }
 
