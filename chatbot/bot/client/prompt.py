@@ -122,13 +122,20 @@ Follow Up Question: {question}
 Given the above conversation and a follow up question, rephrase the follow up question to be a standalone question.
 
 CRITICAL PRONOUN EXPANSION: If the follow-up question uses pronouns like "it", "they", "them", "this", "that", "these", "those", you MUST replace them with the specific entity mentioned in the chat history.
+- **ABSOLUTE PROHIBITION ON FORBIDDEN LOCATIONS:** NEVER expand pronouns to "Azad Kashmir", "Patriata", "Bhubaneswar", "Lahore", "Karachi", "Islamabad", or any location other than "Swiss Cottages Bhurban" or "Swiss Cottages". These are FORBIDDEN entities for pronoun expansion.
+- **LOCATION QUERY PRIORITY:** If the follow-up question is about location (contains "where", "location", "located", "address"), you MUST expand pronouns to "Swiss Cottages Bhurban" or "Swiss Cottages", NOT to nearby attractions, viewpoints, or any other entity mentioned in chat history.
 - **COTTAGE-SPECIFIC OVERRIDE:** If the follow-up question EXPLICITLY mentions a specific cottage number (e.g., "tell me about cottage 7", "what is cottage 9", "cottage 11 pricing"), you MUST use that cottage in the standalone question. Do NOT use a different cottage from chat history. The explicitly mentioned cottage takes ABSOLUTE PRIORITY.
 - **CRITICAL: "THIS COTTAGE" EXPANSION:** If the follow-up question uses "this cottage", "that cottage", "it" (referring to a cottage), you MUST expand it to the specific cottage number from chat history. Priority: Extract cottage numbers (7, 9, 11) from chat history FIRST, before other entities.
 - Scan the chat history to identify the most recent and relevant entity that the pronoun refers to ONLY if no specific cottage is explicitly mentioned in the follow-up question
 - Priority order for entity extraction (ONLY when no explicit cottage is mentioned):
-  1. Specific cottage numbers: "Cottage 7", "Cottage 9", "Cottage 11" (if mentioned in chat history) - HIGHEST PRIORITY for "this cottage", "that cottage", "it" referring to cottages
-  2. "Swiss Cottages Bhurban" or "Swiss Cottages" (if mentioned in chat history)
-  3. Topics: pricing, safety, capacity, facilities, availability, etc. (if mentioned)
+  1. **FOR LOCATION QUERIES:** "Swiss Cottages Bhurban" or "Swiss Cottages" - HIGHEST PRIORITY (even if chat history mentions other entities like "Azad Kashmir", "nearby attractions", "viewpoints")
+  2. Specific cottage numbers: "Cottage 7", "Cottage 9", "Cottage 11" (if mentioned in chat history) - HIGHEST PRIORITY for "this cottage", "that cottage", "it" referring to cottages (for non-location queries)
+  3. "Swiss Cottages Bhurban" or "Swiss Cottages" (if mentioned in chat history) - for non-location queries
+  4. Topics: pricing, safety, capacity, facilities, availability, etc. (if mentioned) - for non-location queries
+- **EXCLUSION RULES:** Do NOT expand pronouns to:
+  * "Azad Kashmir", "Patriata", "Bhubaneswar", "Lahore", "Karachi", "Islamabad" (forbidden locations)
+  * "nearby attractions", "viewpoints", "attractions" (for location queries - these are not the entity being asked about)
+  * Any location other than "Swiss Cottages Bhurban" or "Swiss Cottages"
 - Example: Chat history mentions "Cottage 11" + Follow-up: "tell me more about this cottage" → Standalone: "tell me more about cottage 11" (NOT "tell me more about swiss cottages")
 - Example: Chat history mentions "Cottage 9" + Follow-up: "is it available?" → Standalone: "is cottage 9 available?"
 - Example: Chat history mentions "Swiss Cottages Bhurban" + Follow-up: "is it safe?" → Standalone: "is swiss cottages bhurban safe?"
@@ -872,11 +879,16 @@ LOCATION_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS
 - This is a LOCATION query, NOT a pricing query
 - If you mention pricing, your answer is WRONG
 
-**ABSOLUTE PROHIBITION ON QUESTION REPHRASING**
+**ABSOLUTE PROHIBITION ON QUESTION REPHRASING AND WRONG DESCRIPTIONS**
 - [CRITICAL] DO NOT rephrase, repeat, or restate the user's question - answer directly
 - [CRITICAL] DO NOT start with "Considering your stay...", "Regarding your question...", "About your question...", or any phrase that rephrases the question
-- [CRITICAL] START YOUR ANSWER DIRECTLY with location information - do not preface it with a question or rephrasing
-- Example of WRONG: "Considering your stay at our Swiss Chalet cottages, they are located..."
+- [CRITICAL] DO NOT start with "Bhurban is..." or describe Bhurban as a general place, tourist spot, or picnic area
+- [CRITICAL] START YOUR ANSWER DIRECTLY with "Swiss Cottages is located..." - do NOT describe Bhurban as a place
+- [CRITICAL] SELF-CHECK RULE: Before outputting, check if your answer starts with "Bhurban is..." - if YES, DELETE IT and start with "Swiss Cottages is located..." instead
+- Example of WRONG: "Bhurban is a stunning hill station in Azad Kashmir, Pakistan" - THIS IS COMPLETELY WRONG (describes Bhurban, not Swiss Cottages)
+- Example of WRONG: "Bhurban is a popular picnic spot near Abbottabad, located in the beautiful Azad Kashmir region" - THIS IS COMPLETELY WRONG
+- Example of WRONG: "Bhurban is located in..." - do NOT describe Bhurban, describe Swiss Cottages
+- Example of WRONG: "Bhurban is a..." - ANY answer starting with "Bhurban is" is WRONG
 - Example of CORRECT: "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
 
 **ABSOLUTE PROHIBITION ON INCORRECT NAMING**
@@ -890,19 +902,29 @@ LOCATION_PROMPT_TEMPLATE = """[CRITICAL][CRITICAL][CRITICAL] CRITICAL: READ THIS
 - [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "PC Bhurban" is where the cottages are - PC Bhurban is a nearby hotel/viewpoint, NOT where cottages are located
 - [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "near Patriata" or "Patriata chairlift" for Swiss Cottages location
 - [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir region" for Swiss Cottages location
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Bhurban is a popular picnic spot" or "Bhurban is located in Azad Kashmir" or "Bhurban is near Abbottabad" - these are WRONG
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER describe Bhurban as a general place or tourist spot - you are answering about SWISS COTTAGES location, NOT about Bhurban as a place
+- [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Abbottabad" in relation to Swiss Cottages location - this is WRONG
 - CORRECT LOCATION (USE THIS EXACTLY - COPY IT VERBATIM): "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
 - ALTERNATIVE CORRECT FORMATS: "Swiss Cottages Bhurban, Bhurban, Murree, Pakistan" or "Bhurban, Murree, Pakistan" or "Murree Hills, Pakistan"
-- The cottages are in Murree Hills, Bhurban, Pakistan - NOT in Azad Kashmir, NOT in Patriata
+- The cottages are in Murree Hills, Bhurban, Pakistan - NOT in Azad Kashmir, NOT in Patriata, NOT near Abbottabad
 - PC Bhurban (Pearl Continental Bhurban) is a nearby hotel/viewpoint that overlooks Azad Kashmir, but Swiss Cottages themselves are in Murree Hills, Bhurban, Pakistan
 - Patriata is a different location entirely, NOT where cottages are
 - If context mentions "Azad Kashmir" or "Patriata" for cottage location, COMPLETELY IGNORE IT - it is 100% WRONG - use ONLY the correct location above
 - EXAMPLES OF WRONG ANSWERS (DO NOT GENERATE THESE):
+  * "Bhurban is a popular picnic spot near Abbottabad, located in the beautiful Azad Kashmir region" - WRONG (describes Bhurban as a place, not Swiss Cottages)
+  * "Bhurban is located in Azad Kashmir" - WRONG (describes Bhurban, not Swiss Cottages)
+  * "Bhurban is near Abbottabad" - WRONG (describes Bhurban, not Swiss Cottages)
   * "Swiss Chalet cottages are located near Patriata, in Azad Kashmir" - WRONG
   * "Swiss Cottages is located in Azad Kashmir" - WRONG
   * "Swiss Cottages is located in Patriata" - WRONG
   * "Swiss Cottages is located near Patriata, in Azad Kashmir" - WRONG
+  * "Bhurban is a popular picnic spot near Abbottabad, located in the beautiful Azad Kashmir region" - WRONG (this describes Bhurban as a place, not Swiss Cottages)
+  * "Bhurban is located in Azad Kashmir" - WRONG
+  * "Bhurban is near Abbottabad" - WRONG
 - EXAMPLE OF CORRECT ANSWER (USE THIS FORMAT):
   * "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan. [MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+- [CRITICAL] YOUR ANSWER MUST START WITH "Swiss Cottages" - do NOT start with "Bhurban is..." or describe Bhurban as a general place
 
 Context information is below.
 ---------------------
@@ -937,20 +959,24 @@ CRITICAL: Complete your answer fully - do not stop mid-sentence. Include all rel
 
 CRITICAL RULES - FOLLOW THESE EXACTLY:
 1. [CRITICAL] MANDATORY LOCATION FORMAT: Start your answer EXACTLY with: "Swiss Cottages is located adjacent to Pearl Continental (PC) Bhurban in the Murree Hills, within a secure gated community in Bhurban, Pakistan."
-2. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - this is COMPLETELY WRONG
-3. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location - this is COMPLETELY WRONG
-4. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "PC Bhurban" is where the cottages are - PC Bhurban is a nearby hotel, cottages are adjacent to it
-5. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Bhurban, Azad Kashmir" or "Azad Kashmir, Pakistan" for Swiss Cottages - this is WRONG
-6. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Swiss Chalet", "Swiss Chalet cottages" - ALWAYS use "Swiss Cottages Bhurban"
-7. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT rephrase the question - answer directly without "Considering...", "Regarding...", etc.
-8. [CRITICAL] If context mentions "Azad Kashmir" or "Patriata" for cottage location, COMPLETELY IGNORE IT - it is 100% WRONG - use ONLY the correct location from SYSTEM FACTS
-9. [CRITICAL] If context says "Swiss Cottage is located in Azad Kashmir" or "Swiss Chalet cottages are located near Patriata", REPLACE the entire sentence with the correct location from SYSTEM FACTS
-10. [CRITICAL] MANDATORY: You MUST include the Google Maps link in your response: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
-11. Format the link as: "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
-12. If context contains incorrect location information (Azad Kashmir, Patriata), REPLACE it with the correct location from SYSTEM FACTS above
-13. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing for cottages OR attractions unless explicitly asked
-14. DO NOT use cottage prices (PKR 32,000, PKR 38,000) for attractions
-15. Describe attractions without pricing unless pricing is explicitly in context for that specific attraction
+2. [CRITICAL] ABSOLUTE PROHIBITION: NEVER start your answer with "Bhurban is..." or describe Bhurban as a general place - you are answering about SWISS COTTAGES location, NOT about Bhurban as a tourist spot
+3. [CRITICAL] SELF-CHECK BEFORE OUTPUT: Before you output your answer, check: Does it start with "Bhurban is..." or "Bhurban is a..." or "Bhurban is located..."? If YES, DELETE IT IMMEDIATELY and start over with "Swiss Cottages is located..." - your answer is WRONG if it starts with "Bhurban is..."
+3. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Azad Kashmir" for Swiss Cottages location - this is COMPLETELY WRONG
+4. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Patriata" for Swiss Cottages location - this is COMPLETELY WRONG
+5. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Abbottabad" in relation to Swiss Cottages location - this is WRONG
+6. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "PC Bhurban" is where the cottages are - PC Bhurban is a nearby hotel, cottages are adjacent to it
+7. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Bhurban, Azad Kashmir" or "Azad Kashmir, Pakistan" for Swiss Cottages - this is WRONG
+8. [CRITICAL] ABSOLUTE PROHIBITION: NEVER say "Swiss Chalet", "Swiss Chalet cottages" - ALWAYS use "Swiss Cottages Bhurban"
+9. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT rephrase the question - answer directly without "Considering...", "Regarding...", "Bhurban is...", etc.
+10. [CRITICAL] If context mentions "Azad Kashmir" or "Patriata" for cottage location, COMPLETELY IGNORE IT - it is 100% WRONG - use ONLY the correct location from SYSTEM FACTS
+11. [CRITICAL] If context says "Swiss Cottage is located in Azad Kashmir" or "Bhurban is located in Azad Kashmir", REPLACE the entire sentence with the correct location from SYSTEM FACTS
+12. [CRITICAL] MANDATORY: You MUST include the Google Maps link in your response: https://goo.gl/maps/PQbSR9DsuxwjxUoU6
+13. Format the link as: "[MAP] View on Google Maps: https://goo.gl/maps/PQbSR9DsuxwjxUoU6"
+14. If context contains incorrect location information (Azad Kashmir, Patriata, Abbottabad), REPLACE it with the correct location from SYSTEM FACTS above
+15. [CRITICAL] ABSOLUTE PROHIBITION: DO NOT mention pricing for cottages OR attractions unless explicitly asked
+16. DO NOT use cottage prices (PKR 32,000, PKR 38,000) for attractions
+17. Describe attractions without pricing unless pricing is explicitly in context for that specific attraction
+18. [CRITICAL] YOUR ANSWER MUST BE ABOUT SWISS COTTAGES LOCATION - do NOT describe Bhurban as a general place, tourist spot, or picnic area
 
 REMEMBER: The correct location is ALWAYS "Murree Hills, Bhurban, Pakistan" - NEVER "Azad Kashmir" or "Patriata"
 
