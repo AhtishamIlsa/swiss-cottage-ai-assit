@@ -3398,6 +3398,8 @@
 
             return new Promise((resolve, reject) => {
                 const wsUrl = this.apiUrl.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws/voice';
+                // const wsUrl = 'wss://swisscottagesbhurban.com/ws/voice';
+
                 console.log('🔌 Connecting to WebSocket:', wsUrl);
                 console.log('   API URL:', this.apiUrl);
 
