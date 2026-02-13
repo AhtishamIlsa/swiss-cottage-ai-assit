@@ -155,3 +155,4 @@ wrapt==1.16.0 ; python_version >= "3.10" and python_version < "3.11"
 zipp==3.17.0 ; python_version >= "3.10" and python_version < "3.11"
 noisereduce>=3.0.0
 pydub>=0.25.1
+soundfile>=0.12.1
