@@ -19,11 +19,13 @@ except ImportError:
     # llama_cpp not installed - will use Groq only
     LamaCppClient = None
 
-from bot.conversation.intent_router import IntentRouter
-from bot.conversation.ctx_strategy import (
-    BaseSynthesisStrategy,
-    get_ctx_synthesis_strategy as get_ctx_synthesis_strategy_original,
-)
+# Removed: IntentRouter, ctx_strategy (simplified architecture)
+# from bot.conversation.intent_router import IntentRouter
+# from bot.conversation.ctx_strategy import (
+#     BaseSynthesisStrategy,
+#     get_ctx_synthesis_strategy as get_ctx_synthesis_strategy_original,
+# )
+from bot.conversation.tools import get_tools_config, get_tools_map
 from bot.memory.embedder import Embedder
 from bot.memory.vector_database.chroma import Chroma
 from bot.model.model_registry import get_model_settings, get_models
@@ -36,8 +38,7 @@ _llm_client: Optional[GroqClient] = None  # Type hint simplified since LamaCppCl
 _fast_llm_client: Optional[GroqClient] = None  # Fast model for simple queries
 _reasoning_llm_client: Optional[GroqClient] = None  # Reasoning model for complex queries
 _vector_store: Optional[Chroma] = None
-_intent_router: Optional[IntentRouter] = None
-_ctx_synthesis_strategy: Optional[BaseSynthesisStrategy] = None
+# Removed: _intent_router, _ctx_synthesis_strategy (simplified architecture)
 
 
 def clear_vector_store_cache():
@@ -383,40 +384,14 @@ def get_vector_store(force_reload: bool = False) -> Chroma:
     return _vector_store
 
 
-def get_intent_router() -> IntentRouter:
-    """
-    Get or initialize intent router (cached).
-    
-    Returns:
-        IntentRouter instance
-    """
-    global _intent_router
-    
-    if _intent_router is None:
-        llm = get_llm_client()
-        _intent_router = IntentRouter(llm=llm, use_llm_fallback=True)
-        logger.info("✅ Intent router initialized")
-    
-    return _intent_router
+# Removed: get_intent_router, get_ctx_synthesis_strategy (simplified architecture)
 
 
-def get_ctx_synthesis_strategy(
-    strategy_name: str = "create-and-refine",
-) -> BaseSynthesisStrategy:
-    """
-    Get or initialize context synthesis strategy (cached).
-    
-    Args:
-        strategy_name: Name of the synthesis strategy
-        
-    Returns:
-        BaseSynthesisStrategy instance
-    """
-    global _ctx_synthesis_strategy
-    
-    if _ctx_synthesis_strategy is None:
-        llm = get_llm_client()
-        _ctx_synthesis_strategy = get_ctx_synthesis_strategy_original(strategy_name, llm=llm)
-        logger.info(f"✅ Context synthesis strategy '{strategy_name}' initialized")
-    
-    return _ctx_synthesis_strategy
+def get_tools_config_dependency() -> list:
+    """Get tools configuration for LLM (dependency function)."""
+    return get_tools_config()
+
+
+def get_tools_map_dependency() -> dict:
+    """Get tools function map (dependency function)."""
+    return get_tools_map()

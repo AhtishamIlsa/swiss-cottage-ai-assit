@@ -2107,7 +2107,7 @@
                                     // Sources are no longer displayed - removed
 
                                     // Append token to answer
-                                    fullAnswer += data.chunk;
+                                    fullAnswer += data.content || data.chunk || '';
                                     contentDiv.innerHTML = this.formatMessage(fullAnswer) + '<span class="chatbot-cursor">▌</span>';
 
                                     // Smooth auto-scroll (throttled)
