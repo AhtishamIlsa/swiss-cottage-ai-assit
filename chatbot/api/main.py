@@ -662,6 +662,9 @@ cors_origins.extend([
     "http://127.0.0.1"
      "http://localhost:8002",  # Add this
     "http://127.0.0.1:8002",  # Add this
+      # Live production domain
+    "https://swisscottaggesai.ilsainteractive.com.pk",
+    "http://swisscottaggesai.ilsainteractive.com.pk",
 
 ])
 cors_origins = list(set(cors_origins))  # Remove duplicates
